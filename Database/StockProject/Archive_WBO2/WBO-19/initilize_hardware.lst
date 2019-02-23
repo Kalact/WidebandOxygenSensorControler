@@ -1,0 +1,190 @@
+   1               		.file	"initilize_hardware.c"
+   2               	__SREG__ = 0x3f
+   3               	__SP_H__ = 0x3e
+   4               	__SP_L__ = 0x3d
+   5               	__CCP__ = 0x34
+   6               	__tmp_reg__ = 0
+   7               	__zero_reg__ = 1
+   8               		.global __do_copy_data
+   9               		.global __do_clear_bss
+  11               		.text
+  12               	.Ltext0:
+ 116               	.global	timer0init
+ 118               	timer0init:
+   1:initilize_hardware.c **** #include <avr/interrupt.h>
+   2:initilize_hardware.c **** #include <stdlib.h>
+   3:initilize_hardware.c **** #include "initilize_hardware.h"
+   4:initilize_hardware.c **** 
+   5:initilize_hardware.c **** void timer0init(void)    /* initializes the timer and enables interrupts. *///
+   6:initilize_hardware.c **** {
+ 120               	.LM0:
+ 121               	.LFBB1:
+ 122               	/* prologue: function */
+ 123               	/* frame size = 0 */
+ 124               	/* stack size = 0 */
+ 125               	.L__stack_usage = 0
+   7:initilize_hardware.c **** 	TIMSK |= (_BV(TOIE0));// overflow capture enable
+ 127               	.LM1:
+ 128 0000 89B7      		in r24,89-32
+ 129 0002 8160      		ori r24,lo8(1)
+ 130 0004 89BF      		out 89-32,r24
+   8:initilize_hardware.c **** 	//TCCR0 |= (_BV(CS00));// timer started with /8 prescaler  fills up @1953 hz (4mhz clock)
+   9:initilize_hardware.c **** 	//TCCR0 |= (_BV(CS00)|_BV(CS01));// timer started with /64 prescaler  fills up @245 hz
+  10:initilize_hardware.c **** 	TCCR0 |= (_BV(CS02));// timer started with /256 prescaler  fills up @60 hz
+ 132               	.LM2:
+ 133 0006 83B7      		in r24,83-32
+ 134 0008 8460      		ori r24,lo8(4)
+ 135 000a 83BF      		out 83-32,r24
+ 136               	/* epilogue start */
+  11:initilize_hardware.c **** 	//TCCR0 |= (_BV(CS00)|_BV(CS02));// timer started with /1024 prescaler  fills up @15 hz
+  12:initilize_hardware.c **** }
+ 138               	.LM3:
+ 139 000c 0895      		ret
+ 141               	.Lscope1:
+ 143               	.global	adc_init
+ 145               	adc_init:
+  13:initilize_hardware.c **** 
+  14:initilize_hardware.c **** void adc_init(void)
+  15:initilize_hardware.c **** {
+ 147               	.LM4:
+ 148               	.LFBB2:
+ 149               	/* prologue: function */
+ 150               	/* frame size = 0 */
+ 151               	/* stack size = 0 */
+ 152               	.L__stack_usage = 0
+  16:initilize_hardware.c ****     //ADCSRA |= ( (1<<ADPS2)|(1<<ADPS1)|(1<<ADPS0) );// adc prescale bits 111= div by 128 (8mhz)62.
+  17:initilize_hardware.c **** 	//ADCSRA |= (1<<ADPS2);// adc prescale bits 100= div by 16 (1mhz crystal)  62.5khz
+  18:initilize_hardware.c **** 	ADCSRA |= (1<<ADPS0)|(1<<ADPS2);// adc prescale bits  div by 32 (4mhz crystal ==> 125khz)
+ 154               	.LM5:
+ 155 000e 86B1      		in r24,38-32
+ 156 0010 8560      		ori r24,lo8(5)
+ 157 0012 86B9      		out 38-32,r24
+  19:initilize_hardware.c **** 	//ADCSRA |= ((1<<ADPS2)|(1<<ADPS1));// adc prescale bits div by 64 (4mhz crystal)62.5khz
+  20:initilize_hardware.c **** 	
+  21:initilize_hardware.c **** 	//below not needed if you set mux in when sampling:
+  22:initilize_hardware.c **** 	//ADMUX =  (1<<REFS0);//sets to Avcc as ref voltage
+  23:initilize_hardware.c ****     ADMUX =  ( (1<<REFS0)|(1<<REFS1) );// sets to 2.5v internal ref.
+ 159               	.LM6:
+ 160 0014 80EC      		ldi r24,lo8(-64)
+ 161 0016 87B9      		out 39-32,r24
+  24:initilize_hardware.c **** 	//default admux 0000 = adc0
+  25:initilize_hardware.c **** 	
+  26:initilize_hardware.c **** 	ADCSRA |= (1<<ADEN); // enable the ADC
+ 163               	.LM7:
+ 164 0018 379A      		sbi 38-32,7
+  27:initilize_hardware.c ****     ADCSRA |= (1<<ADIE); // enable ADC conversion complete interrupt
+ 166               	.LM8:
+ 167 001a 339A      		sbi 38-32,3
+  28:initilize_hardware.c ****     //ADCSRA |= (1<<ADFR);// starts  free running mode
+  29:initilize_hardware.c **** 	ADCSRA |= (1<<ADSC);// starts  conversion
+ 169               	.LM9:
+ 170 001c 369A      		sbi 38-32,6
+ 171               	/* epilogue start */
+  30:initilize_hardware.c **** }	
+ 173               	.LM10:
+ 174 001e 0895      		ret
+ 176               	.Lscope2:
+ 178               	.global	setup_timer1
+ 180               	setup_timer1:
+  31:initilize_hardware.c **** 
+  32:initilize_hardware.c **** void setup_timer1(void)// pump control current dac on OC1A
+  33:initilize_hardware.c **** {
+ 182               	.LM11:
+ 183               	.LFBB3:
+ 184               	/* prologue: function */
+ 185               	/* frame size = 0 */
+ 186               	/* stack size = 0 */
+ 187               	.L__stack_usage = 0
+  34:initilize_hardware.c **** 
+  35:initilize_hardware.c **** TCCR1A |= (1<<COM1A1); // COM1a1 =0, com1a0 =1 clear occ1a on compair match counting up 
+ 189               	.LM12:
+ 190 0020 8FB5      		in r24,79-32
+ 191 0022 8068      		ori r24,lo8(-128)
+ 192 0024 8FBD      		out 79-32,r24
+  36:initilize_hardware.c **** //TCCR1A |=    ; //wgm11,10 = 0 PWM pahse and freq correct icr1 is top see page 99
+  37:initilize_hardware.c **** TCCR1B |= (1<<WGM13);//wgm13 set see above
+ 194               	.LM13:
+ 195 0026 8EB5      		in r24,78-32
+ 196 0028 8061      		ori r24,lo8(16)
+ 197 002a 8EBD      		out 78-32,r24
+  38:initilize_hardware.c **** //TCCR1B |= ((1<<CS10)|(1<<CS12));// cs12,11,10 clock prescaler = 1/1024 see page 100
+  39:initilize_hardware.c **** TCCR1B |=(1<<CS10); // timer on, no scaler
+ 199               	.LM14:
+ 200 002c 8EB5      		in r24,78-32
+ 201 002e 8160      		ori r24,lo8(1)
+ 202 0030 8EBD      		out 78-32,r24
+  40:initilize_hardware.c **** ICR1=PWMPUMP_FREQ;// this ts the "top" value of the timer, sets the frequency. 330 gives about 6khz
+ 204               	.LM15:
+ 205 0032 8AE4      		ldi r24,lo8(330)
+ 206 0034 91E0      		ldi r25,hi8(330)
+ 207 0036 97BD      		out 70+1-32,r25
+ 208 0038 86BD      		out 70-32,r24
+  41:initilize_hardware.c **** DDRB |= _BV(1);//Set PORTB1 pin as output (OC1A)
+ 210               	.LM16:
+ 211 003a B99A      		sbi 55-32,1
+  42:initilize_hardware.c **** OCR1A = 116;// Set PWM value to 116. 0 current. 1.7v. max is ICR1 (330 as of now)
+ 213               	.LM17:
+ 214 003c 84E7      		ldi r24,lo8(116)
+ 215 003e 90E0      		ldi r25,hi8(116)
+ 216 0040 9BBD      		out 74+1-32,r25
+ 217 0042 8ABD      		out 74-32,r24
+ 218               	/* epilogue start */
+  43:initilize_hardware.c **** 
+  44:initilize_hardware.c **** }
+ 220               	.LM18:
+ 221 0044 0895      		ret
+ 223               	.Lscope3:
+ 225               	.global	setup_timer2
+ 227               	setup_timer2:
+  45:initilize_hardware.c **** 
+  46:initilize_hardware.c **** void setup_timer2(void)//output 0-5v on OC2 
+  47:initilize_hardware.c **** {
+ 229               	.LM19:
+ 230               	.LFBB4:
+ 231               	/* prologue: function */
+ 232               	/* frame size = 0 */
+ 233               	/* stack size = 0 */
+ 234               	.L__stack_usage = 0
+  48:initilize_hardware.c **** DDRB |=(1<<3);//Set PORTB3 pin as output (OC2)
+ 236               	.LM20:
+ 237 0046 BB9A      		sbi 55-32,3
+  49:initilize_hardware.c **** TCCR2 |= (1<<WGM20)|(1<<WGM21); // fast pwm
+ 239               	.LM21:
+ 240 0048 85B5      		in r24,69-32
+ 241 004a 8864      		ori r24,lo8(72)
+ 242 004c 85BD      		out 69-32,r24
+  50:initilize_hardware.c **** TCCR2 |= (1<<COM21); // clear oc2 on compair, set at bottom. Pg.118
+ 244               	.LM22:
+ 245 004e 85B5      		in r24,69-32
+ 246 0050 8062      		ori r24,lo8(32)
+ 247 0052 85BD      		out 69-32,r24
+  51:initilize_hardware.c **** TCCR2 |=(1<<CS10); // timer on, no scaler  gives about 15khz 
+ 249               	.LM23:
+ 250 0054 85B5      		in r24,69-32
+ 251 0056 8160      		ori r24,lo8(1)
+ 252 0058 85BD      		out 69-32,r24
+  52:initilize_hardware.c **** OCR2= 0;// Set PWM value to 0.
+ 254               	.LM24:
+ 255 005a 13BC      		out 67-32,__zero_reg__
+ 256               	/* epilogue start */
+  53:initilize_hardware.c **** }...
+ 258               	.LM25:
+ 259 005c 0895      		ret
+ 261               	.Lscope4:
+ 263               	.Letext0:
+DEFINED SYMBOLS
+                            *ABS*:00000000 initilize_hardware.c
+     /tmp/ccRAYmA3.s:2      *ABS*:0000003f __SREG__
+     /tmp/ccRAYmA3.s:3      *ABS*:0000003e __SP_H__
+     /tmp/ccRAYmA3.s:4      *ABS*:0000003d __SP_L__
+     /tmp/ccRAYmA3.s:5      *ABS*:00000034 __CCP__
+     /tmp/ccRAYmA3.s:6      *ABS*:00000000 __tmp_reg__
+     /tmp/ccRAYmA3.s:7      *ABS*:00000001 __zero_reg__
+     /tmp/ccRAYmA3.s:118    .text:00000000 timer0init
+     /tmp/ccRAYmA3.s:145    .text:0000000e adc_init
+     /tmp/ccRAYmA3.s:180    .text:00000020 setup_timer1
+     /tmp/ccRAYmA3.s:227    .text:00000046 setup_timer2
+
+UNDEFINED SYMBOLS
+__do_copy_data
+__do_clear_bss

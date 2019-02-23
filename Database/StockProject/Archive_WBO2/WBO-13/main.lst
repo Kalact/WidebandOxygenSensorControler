@@ -1,0 +1,1919 @@
+   1               		.file	"main.c"
+   2               	__SREG__ = 0x3f
+   3               	__SP_H__ = 0x3e
+   4               	__SP_L__ = 0x3d
+   5               	__CCP__ = 0x34
+   6               	__tmp_reg__ = 0
+   7               	__zero_reg__ = 1
+   8               		.global __do_copy_data
+   9               		.global __do_clear_bss
+  11               		.text
+  12               	.Ltext0:
+ 120               		.data
+ 121               	.LC1:
+ 122 0000 7261 6D70 		.string	"ramp temp\n"
+ 122      2074 656D 
+ 122      700A 00
+ 123               		.section	.text.startup,"ax",@progbits
+ 125               	.global	main
+ 127               	main:
+   1:main.c        **** 
+   2:main.c        **** /////////////---------------------------------///////////////////
+   3:main.c        **** // 
+   4:main.c        **** // www.waltech.com
+   5:main.c        **** //
+   6:main.c        **** /////////////---------------------------------/////////////////
+   7:main.c        **** /*
+   8:main.c        ****  */
+   9:main.c        **** 
+  10:main.c        **** //Includes here:
+  11:main.c        **** 
+  12:main.c        **** #include <avr/interrupt.h>
+  13:main.c        **** #include <stdlib.h>
+  14:main.c        **** #include <string.h>
+  15:main.c        **** #include <util/delay.h>
+  16:main.c        **** #include <avr/pgmspace.h>
+  17:main.c        **** #include "pid.h"
+  18:main.c        **** #include "stdint.h"
+  19:main.c        **** #include "initilize_hardware.h"
+  20:main.c        **** #include "dataout.h"
+  21:main.c        **** //#define F_CPU 4000000UL
+  22:main.c        **** //(in makefile)
+  23:main.c        **** #define BAUD 9600UL
+  24:main.c        **** #define UBRRVAL (F_CPU/(BAUD*16)-1)
+  25:main.c        **** 
+  26:main.c        **** /*Lambda*100 to DAC (0-255)
+  27:main.c        **** * 
+  28:main.c        **** *	formula for output voltage:
+  29:main.c        **** *	Vout = [(L-Lmin)/(Lmax-Lmin)]*5
+  30:main.c        **** *
+  31:main.c        **** * Set two values below: 
+  32:main.c        **** */
+  33:main.c        **** #define LAMBDA_MIN	50UL// set to desired value for 0v output (Lambda*100)
+  34:main.c        **** #define LAMBDA_MAX 500UL//set to desired value for 5v output	(Lambda*100)
+  35:main.c        **** 
+  36:main.c        **** #define DAC_FACTOR 2550000UL/(LAMBDA_MAX-LAMBDA_MIN)//don't change: just a calculation pre-compile
+  37:main.c        **** 
+  38:main.c        **** 
+  39:main.c        **** #define MAXPUMP_I 196 // maximum current value for pump (leanest). 
+  40:main.c        **** #define MINPUMP_I 50 // minimum current value for pump.  
+  41:main.c        **** //NOTE (based on manual pump power settings)
+  42:main.c        **** // Above max, virt gnd is pushed up. 
+  43:main.c        **** // Nothing happens below min.
+  44:main.c        **** // 0 current is at 116
+  45:main.c        **** //#define TARGET_NERNST 724 // lambda=1 value for nurnst, target for pump pid 
+  46:main.c        **** #define TARGET_NERNST 832 // lambda=1 value for nurnst, target for pump pid 
+  47:main.c        **** #define TARGET_TEMP 237 
+  48:main.c        **** #define P_temp    450
+  49:main.c        **** #define I_temp    5
+  50:main.c        **** #define D_temp    1
+  51:main.c        **** 
+  52:main.c        **** //#define P_pump    15
+  53:main.c        **** //#define I_pump    74
+  54:main.c        **** //#define D_pump    2
+  55:main.c        **** 
+  56:main.c        **** #define P_pump    8
+  57:main.c        **** #define I_pump    74
+  58:main.c        **** #define D_pump    2
+  59:main.c        **** 
+  60:main.c        **** #define NUM_BOXES 3//for boxcar averaging.  Set to 1 for no averaging
+  61:main.c        **** uint32_t box_data[NUM_BOXES];
+  62:main.c        **** //in pid.h, changed scalevalue to 1 since parampeters are now integers: K * 128
+  63:main.c        **** 
+  64:main.c        **** uint8_t heat_power;//global value fed to timer 0 for heater pwm
+  65:main.c        **** uint16_t ADC_data;//read the ADC into this
+  66:main.c        **** 
+  67:main.c        **** uint16_t nurnst = 0;// value read from adc2 for the nernst cell w/o DC
+  68:main.c        **** uint16_t pump = 0;//measured voltage at pump
+  69:main.c        **** uint16_t DC_val = 0;//value read from adc2 for the nernst cell w/DC
+  70:main.c        **** 
+  71:main.c        **** int16_t IpumpVolts=0;//difference from above proportional to current flowing to pump.
+  72:main.c        **** uint16_t measured_temperature;//measured temperature value. also known as Ri
+  73:main.c        **** uint32_t zero_to_5_WB;//value applier to timer2 to make DAC output
+  74:main.c        **** 
+  75:main.c        **** uint8_t ramp_flag=0;// flag gets set once the startup temperature ramp is done
+  76:main.c        **** uint8_t its_off;//flag to keep track of the heater pwm state
+  77:main.c        **** volatile uint8_t ADC_flag;//keeps track in the ADC interrupt 
+  78:main.c        **** volatile uint8_t charspot=0;//keeps track of the position of the numbers going into the string
+  79:main.c        **** volatile uint8_t rampcounter=0;//test couter
+  80:main.c        **** 
+  81:main.c        **** ////////////////////////////////////////////////////////////////////////
+  82:main.c        **** //for PID:
+  83:main.c        **** uint8_t pidCounter; //True when PID control loop should run one time
+  84:main.c        **** struct PID_DATA pidData_temp; //termperature PID structure of vars
+  85:main.c        **** struct PID_DATA pidData_pump; //pump PID structure of vars
+  86:main.c        **** ////////////////////////////////////////////////////////////////////////
+  87:main.c        **** 
+  88:main.c        **** 
+  89:main.c        **** 
+  90:main.c        **** /////function prototypes/////
+  91:main.c        **** uint16_t readadc(void);
+  92:main.c        **** 
+  93:main.c        **** void do_things(void);
+  94:main.c        **** void two(void);
+  95:main.c        **** void three(void);
+  96:main.c        **** void four(void);
+  97:main.c        **** void six_1(void);
+  98:main.c        **** void six_2(void);
+  99:main.c        **** void six_3(void);
+ 100:main.c        **** void seven(void);
+ 101:main.c        **** void eight(void);
+ 102:main.c        **** 
+ 103:main.c        **** void PID_pump(void);
+ 104:main.c        **** void PID_heater(void);
+ 105:main.c        **** 
+ 106:main.c        **** 
+ 107:main.c        **** 
+ 108:main.c        **** ////Interrupt Service Routines
+ 109:main.c        **** ISR(ADC_vect)
+ 110:main.c        **** {
+ 111:main.c        **** ADC_data = readadc();
+ 112:main.c        **** 
+ 113:main.c        **** if (ADC_flag == 7)//
+ 114:main.c        **** {
+ 115:main.c        **** 	four();
+ 116:main.c        **** }	
+ 117:main.c        **** else if (ADC_flag == 2)
+ 118:main.c        **** {
+ 119:main.c        **** 	six_1();
+ 120:main.c        **** }
+ 121:main.c        **** else if (ADC_flag == 8)
+ 122:main.c        **** {
+ 123:main.c        **** 	six_2();
+ 124:main.c        **** }
+ 125:main.c        **** else if (ADC_flag == 9)
+ 126:main.c        **** {
+ 127:main.c        **** 	six_3();
+ 128:main.c        **** }	
+ 129:main.c        **** 
+ 130:main.c        **** else if (ADC_flag == 3)//nurnst
+ 131:main.c        **** {
+ 132:main.c        **** 	seven();
+ 133:main.c        **** }
+ 134:main.c        **** else if (ADC_flag == 4)//nurnst+DC and calculations
+ 135:main.c        **** {
+ 136:main.c        **** 	eight();
+ 137:main.c        **** }
+ 138:main.c        **** 	else
+ 139:main.c        **** 	
+ 140:main.c        **** 	{
+ 141:main.c        **** 		ADC_data = readadc();//make sure adc is read to clear 
+ 142:main.c        **** 	}
+ 143:main.c        **** }
+ 144:main.c        **** ISR(TIMER0_OVF_vect)
+ 145:main.c        **** {		
+ 146:main.c        **** 	if (its_off==1)//pulse is off
+ 147:main.c        **** 	 {
+ 148:main.c        **** 		 PORTD |= _BV(5);//turn pin on
+ 149:main.c        **** 		 its_off = 0;
+ 150:main.c        **** 		 uint8_t newtimerval= (255-heat_power);
+ 151:main.c        **** 		 if (newtimerval < 128)
+ 152:main.c        **** 		 {
+ 153:main.c        **** 			do_things();
+ 154:main.c        **** 		 }
+ 155:main.c        **** 		 TCNT0 = newtimerval;	 
+ 156:main.c        **** 	 }
+ 157:main.c        **** 	 else//pulse is on
+ 158:main.c        **** 	 {
+ 159:main.c        **** 		 PORTD &=~ _BV(5);//turn pin off
+ 160:main.c        **** 		 its_off = 1; 
+ 161:main.c        **** 		 uint8_t newtimerval= (heat_power);
+ 162:main.c        **** 		 TCNT0 = newtimerval;//heat_power setting into TCNTO
+ 163:main.c        **** 		 if (newtimerval < 128)
+ 164:main.c        **** 		 {
+ 165:main.c        **** 			do_things();
+ 166:main.c        **** 		 }
+ 167:main.c        **** 		 TCNT0 = (newtimerval);//heat_power setting into TCNTO
+ 168:main.c        **** 	 }
+ 169:main.c        **** 
+ 170:main.c        **** }
+ 171:main.c        **** 
+ 172:main.c        **** //////////////////////////////vvvvvvvvvvvvvvv MAIN  vvvvvvvvvvvvvvvvvvvvv//////////////////////////
+ 173:main.c        **** int main()
+ 174:main.c        **** {
+ 129               	.LM0:
+ 130               	.LFBB1:
+ 131               	/* prologue: function */
+ 132               	/* frame size = 0 */
+ 133               	/* stack size = 0 */
+ 134               	.L__stack_usage = 0
+ 175:main.c        **** //set up all the pins as inputs and outputs
+ 176:main.c        **** /* 
+ 177:main.c        ****  * 	PC5 //outputs for R2R DAC/not used
+ 178:main.c        ****  * 	PC4
+ 179:main.c        ****  * 	PC3
+ 180:main.c        ****  *  PB5  
+ 181:main.c        ****  *  PB4
+ 182:main.c        ****  * 	PB0
+ 183:main.c        ****  * 
+ 184:main.c        ****  *  PD4  LED
+ 185:main.c        ****  * 
+ 186:main.c        ****  * Nernst DC connection: PB2
+ 187:main.c        ****  * nch mosfet for heater: PD5
+ 188:main.c        ****  * 
+ 189:main.c        ****  * PB1 = pump power OC1A timer out
+ 190:main.c        ****  * PB3 = output voltage OC2 timer output
+ 191:main.c        ****  *   //ADC:
+ 192:main.c        ****  * nernst V: 	adc2
+ 193:main.c        ****  * pump			adc0
+ 194:main.c        ****  *
+ 195:main.c        ****  */ 
+ 196:main.c        **** DDRC |= _BV(5)| _BV(4) | _BV(3);//six bit dac
+ 136               	.LM1:
+ 137 0000 84B3      		in r24,52-32
+ 138 0002 8863      		ori r24,lo8(56)
+ 139 0004 84BB      		out 52-32,r24
+ 197:main.c        **** DDRB |= _BV(5)| _BV(4) | _BV(0);//six bit dac
+ 141               	.LM2:
+ 142 0006 87B3      		in r24,55-32
+ 143 0008 8163      		ori r24,lo8(49)
+ 144 000a 87BB      		out 55-32,r24
+ 198:main.c        **** DDRD |= _BV(4);//LED
+ 146               	.LM3:
+ 147 000c 8C9A      		sbi 49-32,4
+ 199:main.c        **** 
+ 200:main.c        **** DDRD |= ( _BV(5));// mosfet for heater
+ 149               	.LM4:
+ 150 000e 8D9A      		sbi 49-32,5
+ 201:main.c        **** DDRB |= _BV(2);// dc for temperature measurment
+ 152               	.LM5:
+ 153 0010 BA9A      		sbi 55-32,2
+ 202:main.c        **** ////setup uart:////
+ 203:main.c        **** cli();//  disable interrupts until things are set up
+ 155               	.LM6:
+ 156               	/* #APP */
+ 157               	 ;  203 "main.c" 1
+ 158 0012 F894      		cli
+ 159               	 ;  0 "" 2
+ 204:main.c        **** 	//init uart
+ 205:main.c        ****     /* set baud rate */
+ 206:main.c        ****    	UBRRH = (UBRRVAL >> 8);
+ 161               	.LM7:
+ 162               	/* #NOAPP */
+ 163 0014 10BC      		out 64-32,__zero_reg__
+ 207:main.c        ****    	UBRRL = (UBRRVAL & 0xff);
+ 165               	.LM8:
+ 166 0016 89E1      		ldi r24,lo8(25)
+ 167 0018 89B9      		out 41-32,r24
+ 208:main.c        ****     /* set frame format: 8 bit, no parity, 1 bit */
+ 209:main.c        ****     UCSRC |=  (1 << URSEL | 1 << UCSZ1 | 1 << UCSZ0);
+ 169               	.LM9:
+ 170 001a 80B5      		in r24,64-32
+ 171 001c 8668      		ori r24,lo8(-122)
+ 172 001e 80BD      		out 64-32,r24
+ 210:main.c        ****     UCSRB |= (1 << RXEN | 1 << TXEN | 1 << RXCIE);//enable receive, transmit, and receive complete 
+ 174               	.LM10:
+ 175 0020 8AB1      		in r24,42-32
+ 176 0022 8869      		ori r24,lo8(-104)
+ 177 0024 8AB9      		out 42-32,r24
+ 211:main.c        **** 
+ 212:main.c        **** //disable uart input, avoid Rx buffer overrun:
+ 213:main.c        **** UCSRB &= ~(1 << RXEN);
+ 179               	.LM11:
+ 180 0026 5498      		cbi 42-32,4
+ 214:main.c        **** UCSRB &= ~(1 << RXCIE);
+ 182               	.LM12:
+ 183 0028 5798      		cbi 42-32,7
+ 215:main.c        **** 
+ 216:main.c        **** setup_timer1();// pump control current dac on OC1A  
+ 185               	.LM13:
+ 186 002a 00D0      		rcall setup_timer1
+ 217:main.c        **** setup_timer2();//output 0-5v on OC2  
+ 188               	.LM14:
+ 189 002c 00D0      		rcall setup_timer2
+ 218:main.c        **** 	
+ 219:main.c        **** pid_Init(P_temp, I_temp, D_temp, &pidData_temp);//set up PID structure for temperature
+ 191               	.LM15:
+ 192 002e 82EC      		ldi r24,lo8(450)
+ 193 0030 91E0      		ldi r25,hi8(450)
+ 194 0032 65E0      		ldi r22,lo8(5)
+ 195 0034 70E0      		ldi r23,hi8(5)
+ 196 0036 41E0      		ldi r20,lo8(1)
+ 197 0038 50E0      		ldi r21,hi8(1)
+ 198 003a 20E0      		ldi r18,lo8(pidData_temp)
+ 199 003c 30E0      		ldi r19,hi8(pidData_temp)
+ 200 003e 00D0      		rcall pid_Init
+ 220:main.c        **** pid_Init(P_pump, I_pump, D_pump, &pidData_pump);//set up PID structure for nernst
+ 202               	.LM16:
+ 203 0040 88E0      		ldi r24,lo8(8)
+ 204 0042 90E0      		ldi r25,hi8(8)
+ 205 0044 6AE4      		ldi r22,lo8(74)
+ 206 0046 70E0      		ldi r23,hi8(74)
+ 207 0048 42E0      		ldi r20,lo8(2)
+ 208 004a 50E0      		ldi r21,hi8(2)
+ 209 004c 20E0      		ldi r18,lo8(pidData_pump)
+ 210 004e 30E0      		ldi r19,hi8(pidData_pump)
+ 211 0050 00D0      		rcall pid_Init
+ 221:main.c        **** sei();//enable interrupts
+ 213               	.LM17:
+ 214               	/* #APP */
+ 215               	 ;  221 "main.c" 1
+ 216 0052 7894      		sei
+ 217               	 ;  0 "" 2
+ 222:main.c        **** adc_init();
+ 219               	.LM18:
+ 220               	/* #NOAPP */
+ 221 0054 00D0      		rcall adc_init
+ 223:main.c        **** // ramp up heat:
+ 224:main.c        **** heat_power = 130;//initial time
+ 223               	.LM19:
+ 224 0056 82E8      		ldi r24,lo8(-126)
+ 225 0058 8093 0000 		sts heat_power,r24
+ 225:main.c        **** timer0init();
+ 227               	.LM20:
+ 228 005c 00D0      		rcall timer0init
+ 226:main.c        **** PORTD |= _BV(4);//LED on
+ 230               	.LM21:
+ 231 005e 949A      		sbi 50-32,4
+ 227:main.c        **** uart_putst("ramp temp\n");
+ 233               	.LM22:
+ 234 0060 80E0      		ldi r24,lo8(.LC1)
+ 235 0062 90E0      		ldi r25,hi8(.LC1)
+ 236 0064 00D0      		rcall uart_putst
+ 228:main.c        **** while (heat_power<200)
+ 238               	.LM23:
+ 239 0066 00C0      		rjmp .L2
+ 240               	.L3:
+ 229:main.c        **** {
+ 230:main.c        **** heat_power++;
+ 242               	.LM24:
+ 243 0068 8F5F      		subi r24,lo8(-(1))
+ 244 006a 8093 0000 		sts heat_power,r24
+ 245               	.LBB8:
+ 246               	.LBB9:
+ 248               	.Ltext1:
+   1:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** /* Copyright (c) 2002, Marek Michalkiewicz
+   2:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    Copyright (c) 2004,2005,2007 Joerg Wunsch
+   3:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    Copyright (c) 2007  Florin-Viorel Petrov
+   4:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    All rights reserved.
+   5:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+   6:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    Redistribution and use in source and binary forms, with or without
+   7:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    modification, are permitted provided that the following conditions are met:
+   8:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+   9:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    * Redistributions of source code must retain the above copyright
+  10:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****      notice, this list of conditions and the following disclaimer.
+  11:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+  12:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    * Redistributions in binary form must reproduce the above copyright
+  13:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****      notice, this list of conditions and the following disclaimer in
+  14:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****      the documentation and/or other materials provided with the
+  15:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****      distribution.
+  16:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+  17:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    * Neither the name of the copyright holders nor the names of
+  18:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****      contributors may be used to endorse or promote products derived
+  19:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****      from this software without specific prior written permission.
+  20:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+  21:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  22:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****   AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  23:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****   IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  24:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****   ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+  25:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****   LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+  26:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****   CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+  27:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****   SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+  28:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****   INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+  29:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****   CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+  30:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****   ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+  31:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****   POSSIBILITY OF SUCH DAMAGE. */
+  32:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+  33:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** /* $Id: delay.h.in 2251 2011-09-14 08:20:33Z joerg_wunsch $ */
+  34:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+  35:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #ifndef _UTIL_DELAY_H_
+  36:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #define _UTIL_DELAY_H_ 1
+  37:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+  38:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #ifndef __HAS_DELAY_CYCLES
+  39:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #define __HAS_DELAY_CYCLES 1
+  40:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #endif
+  41:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+  42:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #include <inttypes.h>
+  43:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #include <util/delay_basic.h>
+  44:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #include <math.h>
+  45:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+  46:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** /** \file */
+  47:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** /** \defgroup util_delay <util/delay.h>: Convenience functions for busy-wait delay loops
+  48:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     \code
+  49:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     #define F_CPU 1000000UL  // 1 MHz
+  50:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     //#define F_CPU 14.7456E6
+  51:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     #include <util/delay.h>
+  52:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     \endcode
+  53:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+  54:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     \note As an alternative method, it is possible to pass the
+  55:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     F_CPU macro down to the compiler from the Makefile.
+  56:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     Obviously, in that case, no \c \#define statement should be
+  57:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     used.
+  58:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+  59:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     The functions in this header file are wrappers around the basic
+  60:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     busy-wait functions from <util/delay_basic.h>.  They are meant as
+  61:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     convenience functions where actual time values can be specified
+  62:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     rather than a number of cycles to wait for.  The idea behind is
+  63:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     that compile-time constant expressions will be eliminated by
+  64:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     compiler optimization so floating-point expressions can be used
+  65:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     to calculate the number of delay cycles needed based on the CPU
+  66:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     frequency passed by the macro F_CPU.
+  67:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+  68:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     \note In order for these functions to work as intended, compiler
+  69:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     optimizations <em>must</em> be enabled, and the delay time
+  70:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     <em>must</em> be an expression that is a known constant at
+  71:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     compile-time.  If these requirements are not met, the resulting
+  72:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     delay will be much longer (and basically unpredictable), and
+  73:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     applications that otherwise do not use floating-point calculations
+  74:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     will experience severe code bloat by the floating-point library
+  75:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     routines linked into the application.
+  76:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+  77:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     The functions available allow the specification of microsecond, and
+  78:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     millisecond delays directly, using the application-supplied macro
+  79:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     F_CPU as the CPU clock frequency (in Hertz).
+  80:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+  81:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** */
+  82:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+  83:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #if !defined(__DOXYGEN__)
+  84:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** static inline void _delay_us(double __us) __attribute__((always_inline));
+  85:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** static inline void _delay_ms(double __ms) __attribute__((always_inline));
+  86:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #endif
+  87:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+  88:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #ifndef F_CPU
+  89:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** /* prevent compiler error by supplying a default */
+  90:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** # warning "F_CPU not defined for <util/delay.h>"
+  91:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** # define F_CPU 1000000UL
+  92:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #endif
+  93:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+  94:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #ifndef __OPTIMIZE__
+  95:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** # warning "Compiler optimizations disabled; functions from <util/delay.h> won't work as designed"
+  96:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #endif
+  97:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+  98:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #if __HAS_DELAY_CYCLES && defined(__OPTIMIZE__) && \
+  99:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****   !defined(__DELAY_BACKWARD_COMPATIBLE__) &&	   \
+ 100:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****   __STDC_HOSTED__
+ 101:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #  include <math.h>
+ 102:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #endif
+ 103:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 104:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** /**
+ 105:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    \ingroup util_delay
+ 106:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 107:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    Perform a delay of \c __ms milliseconds, using _delay_loop_2().
+ 108:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 109:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    The macro F_CPU is supposed to be defined to a
+ 110:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    constant defining the CPU clock frequency (in Hertz).
+ 111:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 112:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    The maximal possible delay is 262.14 ms / F_CPU in MHz.
+ 113:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 114:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    When the user request delay which exceed the maximum possible one,
+ 115:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    _delay_ms() provides a decreased resolution functionality. In this
+ 116:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    mode _delay_ms() will work with a resolution of 1/10 ms, providing
+ 117:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    delays up to 6.5535 seconds (independent from CPU frequency).  The
+ 118:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    user will not be informed about decreased resolution.
+ 119:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 120:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    If the avr-gcc toolchain has __builtin_avr_delay_cycles(unsigned long)
+ 121:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    support, maximal possible delay is 4294967.295 ms/ F_CPU in MHz. For
+ 122:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    values greater than the maximal possible delay, overflows results in
+ 123:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    no delay i.e., 0ms.
+ 124:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 125:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    Conversion of __us into clock cycles may not always result in integer.
+ 126:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    By default, the clock cycles rounded up to next integer. This ensures that
+ 127:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    the user gets atleast __us microseconds of delay.
+ 128:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 129:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    Alternatively, user can define __DELAY_ROUND_DOWN__ and __DELAY_ROUND_CLOSEST__
+ 130:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    to round down and round to closest integer.
+ 131:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 132:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    Note: The new implementation of _delay_ms(double __ms) with 
+ 133:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     __builtin_avr_delay_cycles(unsigned long) support is not backward compatible. 
+ 134:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    User can define __DELAY_BACKWARD_COMPATIBLE__ to get a backward compatible delay.
+ 135:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    Also, the backward compatible
+ 136:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    algorithm will be chosen if the code is compiled in a <em>freestanding
+ 137:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    environment</em> (GCC option \c -ffreestanding), as the math functions
+ 138:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    required for rounding are not available to the compiler then.
+ 139:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 140:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****  */
+ 141:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** void
+ 142:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** _delay_ms(double __ms)
+ 143:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** {
+ 144:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	uint16_t __ticks;
+ 145:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	double __tmp ; 
+ 146:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #if __HAS_DELAY_CYCLES && defined(__OPTIMIZE__) && \
+ 147:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****   !defined(__DELAY_BACKWARD_COMPATIBLE__) &&	   \
+ 148:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****   __STDC_HOSTED__
+ 149:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	uint32_t __ticks_dc;
+ 150:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	extern void __builtin_avr_delay_cycles(unsigned long);
+ 151:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	__tmp = ((F_CPU) / 1e3) * __ms;
+ 152:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 153:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	#if defined(__DELAY_ROUND_DOWN__)
+ 154:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 		__ticks_dc = (uint32_t)fabs(__tmp);
+ 155:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 156:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	#elif defined(__DELAY_ROUND_CLOSEST__)
+ 157:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 		__ticks_dc = (uint32_t)(fabs(__tmp)+0.5);
+ 158:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 159:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	#else
+ 160:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 		//round up by default
+ 161:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 		__ticks_dc = (uint32_t)(ceil(fabs(__tmp)));
+ 162:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	#endif
+ 163:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 164:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	__builtin_avr_delay_cycles(__ticks_dc);
+ 250               	.LM25:
+ 251 006e 2FEB      		 ldi r18,lo8(119999)
+ 252 0070 34ED      	    ldi r19,hi8(119999)
+ 253 0072 41E0      	    ldi r20,hlo8(119999)
+ 254 0074 2150      	    1:subi r18,1
+ 255 0076 3040      	    sbci r19,0
+ 256 0078 4040      	    sbci r20,0
+ 257 007a 01F4      	    brne 1b
+ 258 007c 00C0      		rjmp .
+ 259 007e 0000      		nop
+ 260               	.LBE9:
+ 261               	.LBE8:
+ 263               	.Ltext2:
+ 231:main.c        **** _delay_ms(150);
+ 232:main.c        **** uart_put16dec(heat_power);
+ 265               	.LM26:
+ 266 0080 90E0      		ldi r25,lo8(0)
+ 267 0082 00D0      		rcall uart_put16dec
+ 233:main.c        **** uart_putch(',');
+ 269               	.LM27:
+ 270 0084 8CE2      		ldi r24,lo8(44)
+ 271 0086 00D0      		rcall uart_putch
+ 234:main.c        **** uart_putch(' ');
+ 273               	.LM28:
+ 274 0088 80E2      		ldi r24,lo8(32)
+ 275 008a 00D0      		rcall uart_putch
+ 276               	.L2:
+ 228:main.c        **** while (heat_power<200)
+ 278               	.LM29:
+ 279 008c 8091 0000 		lds r24,heat_power
+ 280 0090 883C      		cpi r24,lo8(-56)
+ 281 0092 00F0      		brlo .L3
+ 235:main.c        **** }
+ 236:main.c        **** uart_putch('\n');
+ 283               	.LM30:
+ 284 0094 8AE0      		ldi r24,lo8(10)
+ 285 0096 00D0      		rcall uart_putch
+ 237:main.c        **** ramp_flag=1;
+ 287               	.LM31:
+ 288 0098 81E0      		ldi r24,lo8(1)
+ 289 009a 8093 0000 		sts ramp_flag,r24
+ 290               	.L4:
+ 291 009e 00C0      		rjmp .L4
+ 293               	.Lscope1:
+ 294               		.text
+ 296               	.global	do_things
+ 298               	do_things:
+ 238:main.c        **** ///////////////////////
+ 239:main.c        **** while(1)
+ 240:main.c        **** 	{
+ 241:main.c        **** //most stuff handled in timer0 interrupt
+ 242:main.c        **** //Suggested: use a state machine, just read ADC data in the interrupt, and poll a flag to see if it
+ 243:main.c        **** 	}
+ 244:main.c        **** return 0;
+ 245:main.c        **** }
+ 246:main.c        **** //// end of main
+ 247:main.c        **** ///////////////////////////////////////////////////////// 
+ 248:main.c        **** //////vvvvvvvvvvvvvv functions vvvvvvvvvvvvvvvvv/////////
+ 249:main.c        **** /////////////////////////////////////////////////////////
+ 250:main.c        **** 
+ 251:main.c        **** void do_things(void)//do first adc, throw away pump measurement
+ 252:main.c        **** {  
+ 300               	.LM32:
+ 301               	.LFBB2:
+ 302               	/* prologue: function */
+ 303               	/* frame size = 0 */
+ 304               	/* stack size = 0 */
+ 305               	.L__stack_usage = 0
+ 253:main.c        **** 	if (ramp_flag == 1)
+ 307               	.LM33:
+ 308 0000 8091 0000 		lds r24,ramp_flag
+ 309 0004 8130      		cpi r24,lo8(1)
+ 310 0006 01F4      		brne .L5
+ 311               	.LBB14:
+ 312               	.LBB15:
+ 313               	.LBB16:
+ 314               	.LBB17:
+ 316               	.Ltext3:
+ 165:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 166:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #else
+ 167:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	__tmp = ((F_CPU) / 4e3) * __ms;
+ 168:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	if (__tmp < 1.0)
+ 169:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 		__ticks = 1;
+ 170:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	else if (__tmp > 65535)
+ 171:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	{
+ 172:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 		//	__ticks = requested delay in 1/10 ms
+ 173:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 		__ticks = (uint16_t) (__ms * 10.0);
+ 174:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 		while(__ticks)
+ 175:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 		{
+ 176:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 			// wait 1/10 ms
+ 177:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 			_delay_loop_2(((F_CPU) / 4e3) / 10);
+ 178:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 			__ticks --;
+ 179:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 		}
+ 180:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 		return;
+ 181:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	}
+ 182:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	else
+ 183:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 		__ticks = (uint16_t)__tmp;
+ 184:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	_delay_loop_2(__ticks);
+ 185:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #endif
+ 186:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** }
+ 187:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 188:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** /**
+ 189:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    \ingroup util_delay
+ 190:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 191:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    Perform a delay of \c __us microseconds, using _delay_loop_1().
+ 192:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 193:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    The macro F_CPU is supposed to be defined to a
+ 194:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    constant defining the CPU clock frequency (in Hertz).
+ 195:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 196:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    The maximal possible delay is 768 us / F_CPU in MHz.
+ 197:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 198:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    If the user requests a delay greater than the maximal possible one,
+ 199:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    _delay_us() will automatically call _delay_ms() instead.  The user
+ 200:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    will not be informed about this case.
+ 201:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 202:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    If the avr-gcc toolchain has __builtin_avr_delay_cycles(unsigned long)
+ 203:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    support, maximal possible delay is 4294967.295 us/ F_CPU in MHz. For
+ 204:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    values greater than the maximal possible delay, overflow results in
+ 205:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    no delay i.e., 0us.
+ 206:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****   
+ 207:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    Conversion of __us into clock cycles may not always result in integer.
+ 208:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    By default, the clock cycles rounded up to next integer. This ensures that
+ 209:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    the user gets atleast __us microseconds of delay.
+ 210:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 211:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    Alternatively, user can define __DELAY_ROUND_DOWN__ and __DELAY_ROUND_CLOSEST__
+ 212:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    to round down and round to closest integer.
+ 213:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****  
+ 214:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    Note: The new implementation of _delay_us(double __us) with 
+ 215:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****     __builtin_avr_delay_cycles(unsigned long) support is not backward compatible.
+ 216:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    User can define __DELAY_BACKWARD_COMPATIBLE__ to get a backward compatible delay.
+ 217:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    Also, the backward compatible
+ 218:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    algorithm will be chosen if the code is compiled in a <em>freestanding
+ 219:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    environment</em> (GCC option \c -ffreestanding), as the math functions
+ 220:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****    required for rounding are not available to the compiler then.
+ 221:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 222:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****  */
+ 223:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** void
+ 224:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** _delay_us(double __us)
+ 225:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** {
+ 226:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	uint8_t __ticks;
+ 227:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	double __tmp ; 
+ 228:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** #if __HAS_DELAY_CYCLES && defined(__OPTIMIZE__) && \
+ 229:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****   !defined(__DELAY_BACKWARD_COMPATIBLE__) &&	   \
+ 230:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h ****   __STDC_HOSTED__
+ 231:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	uint32_t __ticks_dc;
+ 232:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	extern void __builtin_avr_delay_cycles(unsigned long);
+ 233:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	__tmp = ((F_CPU) / 1e6) * __us;
+ 234:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 235:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	#if defined(__DELAY_ROUND_DOWN__)
+ 236:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 		__ticks_dc = (uint32_t)fabs(__tmp);
+ 237:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 238:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	#elif defined(__DELAY_ROUND_CLOSEST__)
+ 239:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 		__ticks_dc = (uint32_t)(fabs(__tmp)+0.5);
+ 240:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 241:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	#else
+ 242:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 		//round up by default
+ 243:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 		__ticks_dc = (uint32_t)(ceil(fabs(__tmp)));
+ 244:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	#endif
+ 245:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 
+ 246:/usr/local/avr/bin/../lib/gcc/avr/4.6.2/../../../../avr/include/util/delay.h **** 	__builtin_avr_delay_cycles(__ticks_dc);
+ 318               	.LM34:
+ 319 0008 82E4      		 ldi r24,lo8(66)
+ 320 000a 8A95      	    1:dec r24
+ 321 000c 01F4      	    brne 1b
+ 322 000e 00C0      		rjmp .
+ 323               	.LBE17:
+ 324               	.LBE16:
+ 326               	.Ltext4:
+ 254:main.c        **** 	{
+ 255:main.c        **** 	_delay_us(50);//maybe let things settle?
+ 256:main.c        **** 	ADC_flag = 7;//sets to run function after conversion
+ 328               	.LM35:
+ 329 0010 87E0      		ldi r24,lo8(7)
+ 330 0012 8093 0000 		sts ADC_flag,r24
+ 257:main.c        **** 	ADMUX =(192 + 0);//V refrence plus mux (pump)			
+ 332               	.LM36:
+ 333 0016 80EC      		ldi r24,lo8(-64)
+ 334 0018 87B9      		out 39-32,r24
+ 258:main.c        **** 	ADCSRA |= _BV(ADSC);// starts  conversion
+ 336               	.LM37:
+ 337 001a 369A      		sbi 38-32,6
+ 338               	.L5:
+ 339 001c 0895      		ret
+ 340               	.LBE15:
+ 341               	.LBE14:
+ 343               	.Lscope2:
+ 345               	.global	__vector_9
+ 347               	__vector_9:
+ 145:main.c        **** {		
+ 349               	.LM38:
+ 350               	.LFBB3:
+ 351 001e 1F92      		push r1
+ 352 0020 0F92      		push r0
+ 353 0022 0FB6      		in r0,__SREG__
+ 354 0024 0F92      		push r0
+ 355 0026 1124      		clr __zero_reg__
+ 356 0028 2F93      		push r18
+ 357 002a 3F93      		push r19
+ 358 002c 4F93      		push r20
+ 359 002e 5F93      		push r21
+ 360 0030 6F93      		push r22
+ 361 0032 7F93      		push r23
+ 362 0034 8F93      		push r24
+ 363 0036 9F93      		push r25
+ 364 0038 AF93      		push r26
+ 365 003a BF93      		push r27
+ 366 003c CF93      		push r28
+ 367 003e EF93      		push r30
+ 368 0040 FF93      		push r31
+ 369               	/* prologue: Signal */
+ 370               	/* frame size = 0 */
+ 371               	/* stack size = 16 */
+ 372               	.L__stack_usage = 16
+ 146:main.c        **** 	if (its_off==1)//pulse is off
+ 374               	.LM39:
+ 375 0042 8091 0000 		lds r24,its_off
+ 376 0046 8130      		cpi r24,lo8(1)
+ 377 0048 01F4      		brne .L8
+ 378               	.LBB18:
+ 148:main.c        **** 		 PORTD |= _BV(5);//turn pin on
+ 380               	.LM40:
+ 381 004a 959A      		sbi 50-32,5
+ 149:main.c        **** 		 its_off = 0;
+ 383               	.LM41:
+ 384 004c 1092 0000 		sts its_off,__zero_reg__
+ 150:main.c        **** 		 uint8_t newtimerval= (255-heat_power);
+ 386               	.LM42:
+ 387 0050 C091 0000 		lds r28,heat_power
+ 388 0054 C095      		com r28
+ 389 0056 00C0      		rjmp .L14
+ 390               	.L8:
+ 391               	.LBE18:
+ 392               	.LBB19:
+ 159:main.c        **** 		 PORTD &=~ _BV(5);//turn pin off
+ 394               	.LM43:
+ 395 0058 9598      		cbi 50-32,5
+ 160:main.c        **** 		 its_off = 1; 
+ 397               	.LM44:
+ 398 005a 81E0      		ldi r24,lo8(1)
+ 399 005c 8093 0000 		sts its_off,r24
+ 161:main.c        **** 		 uint8_t newtimerval= (heat_power);
+ 401               	.LM45:
+ 402 0060 C091 0000 		lds r28,heat_power
+ 162:main.c        **** 		 TCNT0 = newtimerval;//heat_power setting into TCNTO
+ 404               	.LM46:
+ 405 0064 C2BF      		out 82-32,r28
+ 406               	.L14:
+ 163:main.c        **** 		 if (newtimerval < 128)
+ 408               	.LM47:
+ 409 0066 C7FF      		sbrs r28,7
+ 165:main.c        **** 			do_things();
+ 411               	.LM48:
+ 412 0068 00D0      		rcall do_things
+ 413               	.L11:
+ 167:main.c        **** 		 TCNT0 = (newtimerval);//heat_power setting into TCNTO
+ 415               	.LM49:
+ 416 006a C2BF      		out 82-32,r28
+ 417               	/* epilogue start */
+ 418               	.LBE19:
+ 170:main.c        **** }
+ 420               	.LM50:
+ 421 006c FF91      		pop r31
+ 422 006e EF91      		pop r30
+ 423 0070 CF91      		pop r28
+ 424 0072 BF91      		pop r27
+ 425 0074 AF91      		pop r26
+ 426 0076 9F91      		pop r25
+ 427 0078 8F91      		pop r24
+ 428 007a 7F91      		pop r23
+ 429 007c 6F91      		pop r22
+ 430 007e 5F91      		pop r21
+ 431 0080 4F91      		pop r20
+ 432 0082 3F91      		pop r19
+ 433 0084 2F91      		pop r18
+ 434 0086 0F90      		pop r0
+ 435 0088 0FBE      		out __SREG__,r0
+ 436 008a 0F90      		pop r0
+ 437 008c 1F90      		pop r1
+ 438 008e 1895      		reti
+ 446               	.Lscope3:
+ 448               	.global	four
+ 450               	four:
+ 259:main.c        **** 	}	
+ 260:main.c        **** }
+ 261:main.c        **** void four(void)//record aux adc 1, mux for pump current
+ 262:main.c        **** { 
+ 452               	.LM51:
+ 453               	.LFBB4:
+ 454               	/* prologue: function */
+ 455               	/* frame size = 0 */
+ 456               	/* stack size = 0 */
+ 457               	.L__stack_usage = 0
+ 263:main.c        **** 	ADC_flag = 2;
+ 459               	.LM52:
+ 460 0090 82E0      		ldi r24,lo8(2)
+ 461 0092 8093 0000 		sts ADC_flag,r24
+ 264:main.c        **** 	ADMUX =(192 + 0);//V refrence plus mux (pump)			
+ 463               	.LM53:
+ 464 0096 80EC      		ldi r24,lo8(-64)
+ 465 0098 87B9      		out 39-32,r24
+ 265:main.c        **** 	ADCSRA |= _BV(ADSC);// starts  conversion
+ 467               	.LM54:
+ 468 009a 369A      		sbi 38-32,6
+ 469               	/* epilogue start */
+ 266:main.c        **** }	
+ 471               	.LM55:
+ 472 009c 0895      		ret
+ 474               	.Lscope4:
+ 476               	.global	six_1
+ 478               	six_1:
+ 267:main.c        **** 
+ 268:main.c        **** void six_1(void)//measures pump current 1/3 sample
+ 269:main.c        **** {	
+ 480               	.LM56:
+ 481               	.LFBB5:
+ 482               	/* prologue: function */
+ 483               	/* frame size = 0 */
+ 484               	/* stack size = 0 */
+ 485               	.L__stack_usage = 0
+ 270:main.c        **** 	pump = ADC_data;
+ 487               	.LM57:
+ 488 009e 8091 0000 		lds r24,ADC_data
+ 489 00a2 9091 0000 		lds r25,ADC_data+1
+ 490 00a6 9093 0000 		sts pump+1,r25
+ 491 00aa 8093 0000 		sts pump,r24
+ 271:main.c        **** 	ADC_flag = 8;	
+ 493               	.LM58:
+ 494 00ae 88E0      		ldi r24,lo8(8)
+ 495 00b0 8093 0000 		sts ADC_flag,r24
+ 272:main.c        **** 	ADCSRA |= (1<<ADSC);// starts  next conversion		
+ 497               	.LM59:
+ 498 00b4 369A      		sbi 38-32,6
+ 499               	/* epilogue start */
+ 273:main.c        **** }
+ 501               	.LM60:
+ 502 00b6 0895      		ret
+ 504               	.Lscope5:
+ 506               	.global	six_2
+ 508               	six_2:
+ 274:main.c        **** 
+ 275:main.c        **** void six_2(void)//measures pump current 2/3
+ 276:main.c        **** {	
+ 510               	.LM61:
+ 511               	.LFBB6:
+ 512               	/* prologue: function */
+ 513               	/* frame size = 0 */
+ 514               	/* stack size = 0 */
+ 515               	.L__stack_usage = 0
+ 277:main.c        **** 	pump = pump + ADC_data;
+ 517               	.LM62:
+ 518 00b8 8091 0000 		lds r24,pump
+ 519 00bc 9091 0000 		lds r25,pump+1
+ 520 00c0 2091 0000 		lds r18,ADC_data
+ 521 00c4 3091 0000 		lds r19,ADC_data+1
+ 522 00c8 820F      		add r24,r18
+ 523 00ca 931F      		adc r25,r19
+ 524 00cc 9093 0000 		sts pump+1,r25
+ 525 00d0 8093 0000 		sts pump,r24
+ 278:main.c        **** 	ADC_flag = 9;	
+ 527               	.LM63:
+ 528 00d4 89E0      		ldi r24,lo8(9)
+ 529 00d6 8093 0000 		sts ADC_flag,r24
+ 279:main.c        **** 	ADCSRA |= (1<<ADSC);// starts  next conversion		
+ 531               	.LM64:
+ 532 00da 369A      		sbi 38-32,6
+ 533               	/* epilogue start */
+ 280:main.c        **** }
+ 535               	.LM65:
+ 536 00dc 0895      		ret
+ 538               	.Lscope6:
+ 540               	.global	six_3
+ 542               	six_3:
+ 281:main.c        **** 
+ 282:main.c        **** void six_3(void)//measures pump current 3/3
+ 283:main.c        **** {	
+ 544               	.LM66:
+ 545               	.LFBB7:
+ 546               	/* prologue: function */
+ 547               	/* frame size = 0 */
+ 548               	/* stack size = 0 */
+ 549               	.L__stack_usage = 0
+ 284:main.c        **** 	pump = pump + ADC_data;
+ 551               	.LM67:
+ 552 00de 8091 0000 		lds r24,ADC_data
+ 553 00e2 9091 0000 		lds r25,ADC_data+1
+ 554 00e6 2091 0000 		lds r18,pump
+ 555 00ea 3091 0000 		lds r19,pump+1
+ 556 00ee 820F      		add r24,r18
+ 557 00f0 931F      		adc r25,r19
+ 285:main.c        **** 	pump = pump/3;
+ 559               	.LM68:
+ 560 00f2 63E0      		ldi r22,lo8(3)
+ 561 00f4 70E0      		ldi r23,hi8(3)
+ 562 00f6 00D0      		rcall __udivmodhi4
+ 563 00f8 CB01      		movw r24,r22
+ 564 00fa 6093 0000 		sts pump,r22
+ 565 00fe 9093 0000 		sts pump+1,r25
+ 286:main.c        **** 	charspot = put_in_string(pump,'\0',charspot);//puts data in big string and sends back new char spo
+ 567               	.LM69:
+ 568 0102 4091 0000 		lds r20,charspot
+ 569 0106 60E0      		ldi r22,lo8(0)
+ 570 0108 00D0      		rcall put_in_string
+ 571 010a 8093 0000 		sts charspot,r24
+ 287:main.c        **** 	ADC_flag = 3;	
+ 573               	.LM70:
+ 574 010e 83E0      		ldi r24,lo8(3)
+ 575 0110 8093 0000 		sts ADC_flag,r24
+ 288:main.c        **** 	ADMUX =(192 + 2);//V refrence plus mux channel//use 192 for internal 2.5v ref//use 64 for avcc as 
+ 577               	.LM71:
+ 578 0114 82EC      		ldi r24,lo8(-62)
+ 579 0116 87B9      		out 39-32,r24
+ 289:main.c        **** 	ADCSRA |= (1<<ADSC);// starts  next conversion		
+ 581               	.LM72:
+ 582 0118 369A      		sbi 38-32,6
+ 583               	/* epilogue start */
+ 290:main.c        **** }
+ 585               	.LM73:
+ 586 011a 0895      		ret
+ 588               	.Lscope7:
+ 590               	.global	seven
+ 592               	seven:
+ 291:main.c        **** 
+ 292:main.c        **** void seven(void)//measure nurnst 
+ 293:main.c        **** {
+ 594               	.LM74:
+ 595               	.LFBB8:
+ 596               	/* prologue: function */
+ 597               	/* frame size = 0 */
+ 598               	/* stack size = 0 */
+ 599               	.L__stack_usage = 0
+ 294:main.c        **** 	nurnst = ADC_data;
+ 601               	.LM75:
+ 602 011c 8091 0000 		lds r24,ADC_data
+ 603 0120 9091 0000 		lds r25,ADC_data+1
+ 604 0124 9093 0000 		sts nurnst+1,r25
+ 605 0128 8093 0000 		sts nurnst,r24
+ 295:main.c        **** 	charspot = put_in_string(nurnst,'\0',charspot);//puts data in big string
+ 607               	.LM76:
+ 608 012c 4091 0000 		lds r20,charspot
+ 609 0130 60E0      		ldi r22,lo8(0)
+ 610 0132 00D0      		rcall put_in_string
+ 611 0134 8093 0000 		sts charspot,r24
+ 296:main.c        **** 	ADC_flag = 4;
+ 613               	.LM77:
+ 614 0138 84E0      		ldi r24,lo8(4)
+ 615 013a 8093 0000 		sts ADC_flag,r24
+ 297:main.c        **** 	ADMUX =(192 + 2);//V refrence plus mux channel//use 192 for internal 2.5v ref//use 64 for avcc as 
+ 617               	.LM78:
+ 618 013e 82EC      		ldi r24,lo8(-62)
+ 619 0140 87B9      		out 39-32,r24
+ 298:main.c        **** 	PORTB |= _BV(2);//DC on
+ 621               	.LM79:
+ 622 0142 C29A      		sbi 56-32,2
+ 299:main.c        **** 	ADCSRA |= (1<<ADSC);// starts  conversion	
+ 624               	.LM80:
+ 625 0144 369A      		sbi 38-32,6
+ 626               	/* epilogue start */
+ 300:main.c        **** }
+ 628               	.LM81:
+ 629 0146 0895      		ret
+ 631               	.Lscope8:
+ 633               	.global	readadc
+ 635               	readadc:
+ 301:main.c        **** 
+ 302:main.c        **** void eight(void)
+ 303:main.c        **** {
+ 304:main.c        **** 	PORTB &=~ _BV(2);//back to lo
+ 305:main.c        **** 	DC_val = ADC_data;
+ 306:main.c        **** //	charspot = put_in_string(DC_val,'d',charspot);//puts data in big string
+ 307:main.c        **** 	ADC_flag = 0;	
+ 308:main.c        **** 	////do calculations and PIDs
+ 309:main.c        **** 	PID_pump();//run PID on pump and update pump pwm.
+ 310:main.c        **** 	//done in PID_pump//charspot = put_in_string(measured_temperature,'f',charspot);
+ 311:main.c        **** 	measured_temperature = (DC_val - nurnst);
+ 312:main.c        **** 	if (measured_temperature <= 255)//make into (8-bit - 10 bit value) and prevent negatives
+ 313:main.c        **** 		{
+ 314:main.c        **** 		measured_temperature = (255 - measured_temperature);
+ 315:main.c        **** 		}
+ 316:main.c        **** 	else
+ 317:main.c        **** 		{
+ 318:main.c        **** 		measured_temperature =0;
+ 319:main.c        **** 		}
+ 320:main.c        **** 	if ( (measured_temperature> (TARGET_TEMP-5))&&(measured_temperature<(TARGET_TEMP+5)) )
+ 321:main.c        **** 		{
+ 322:main.c        **** 		PORTD &=~ _BV(4);//LED off
+ 323:main.c        **** 		}
+ 324:main.c        **** 	else
+ 325:main.c        **** 		{
+ 326:main.c        **** 		PORTD |= _BV(4);//LED on
+ 327:main.c        **** 		}
+ 328:main.c        **** 	charspot = put_in_string(measured_temperature,'\0',charspot);//puts data in big string
+ 329:main.c        **** 	//calculate lambda output from Look Up Table:
+ 330:main.c        **** 	struct two_col{
+ 331:main.c        **** 		uint16_t x;
+ 332:main.c        **** 		uint16_t y;
+ 333:main.c        **** 	}; 
+ 334:main.c        **** 	struct two_col lambda_curve[]={	//table columns: pump, lambda(pump current ADC value, lambda)
+ 335:main.c        **** 		{200,0},
+ 336:main.c        **** 		{280,68},
+ 337:main.c        **** 		{392,80},
+ 338:main.c        **** 		{442,85},
+ 339:main.c        **** 		{488,90},
+ 340:main.c        **** 		{562,100},
+ 341:main.c        **** 		{616,110},
+ 342:main.c        **** 		{669,143},
+ 343:main.c        **** 		{712,170},
+ 344:main.c        **** 		{783,242},
+ 345:main.c        **** 		{960,20200},
+ 346:main.c        **** 		{1024,26000},
+ 347:main.c        **** 		};
+ 348:main.c        **** 	uint8_t n = 12;//number of rows in table	
+ 349:main.c        **** 	uint32_t lambda=0;
+ 350:main.c        **** 	//out of range check:
+ 351:main.c        **** 	if (pump<lambda_curve[0].x)//smaller than the lowest value in LOT
+ 352:main.c        **** 	{lambda = lambda_curve[0].y;}
+ 353:main.c        **** 	else if (pump>lambda_curve[n-1].x)//larger than the highest value in the LOT
+ 354:main.c        **** 	{lambda = lambda_curve[n-1].y;}
+ 355:main.c        **** 	//lookup in table, interpolate
+ 356:main.c        **** 	for( uint8_t i = 0; i < n-1; i++ )//loop through table and find value
+ 357:main.c        **** 	{
+ 358:main.c        **** 		if ( lambda_curve[i].x <= pump && lambda_curve[i+1].x >= pump )
+ 359:main.c        **** 		{
+ 360:main.c        **** 			uint16_t diffx = pump - lambda_curve[i].x; //difference between the pump value and the x value i
+ 361:main.c        **** 			uint16_t diffn = lambda_curve[i+1].x - lambda_curve[i].x;//spacing between the values in the LOT
+ 362:main.c        **** 			lambda = lambda_curve[i].y + ( lambda_curve[i+1].y - lambda_curve[i].y ) * diffx / diffn; //outp
+ 363:main.c        **** 		}
+ 364:main.c        **** 	}
+ 365:main.c        **** 	//boxcar average:
+ 366:main.c        **** 	for (uint8_t i = 0; i<(NUM_BOXES-1); i++)//shift boxcars
+ 367:main.c        **** 	{
+ 368:main.c        **** 		box_data[i]=box_data[i+1];
+ 369:main.c        **** 	}
+ 370:main.c        **** 	box_data[NUM_BOXES-1] = lambda;//put in latest value
+ 371:main.c        **** 	uint32_t avrg_data_tot = 0; 
+ 372:main.c        **** 	for (uint8_t i = 0; i<(NUM_BOXES); i++)//add up boxcars
+ 373:main.c        **** 	{
+ 374:main.c        **** 	avrg_data_tot = avrg_data_tot+box_data[i];
+ 375:main.c        **** 	}
+ 376:main.c        **** 	lambda = avrg_data_tot/NUM_BOXES;//get averaged value
+ 377:main.c        **** 	
+ 378:main.c        **** 	charspot = put_in_string(lambda,'\0',charspot);//puts data in big string
+ 379:main.c        **** 	if((lambda>=LAMBDA_MIN) && (lambda<=LAMBDA_MAX))
+ 380:main.c        **** 	{
+ 381:main.c        **** 		uint32_t dacval = (lambda-LAMBDA_MIN)*DAC_FACTOR;
+ 382:main.c        **** 		zero_to_5_WB = dacval/10000UL;
+ 383:main.c        **** 	}
+ 384:main.c        **** 	else if (lambda>LAMBDA_MAX){zero_to_5_WB = 255;}
+ 385:main.c        **** 	else {zero_to_5_WB = 0;}
+ 386:main.c        **** 	OCR2 = zero_to_5_WB;// set DAC output
+ 387:main.c        **** 	charspot = put_in_string(zero_to_5_WB,'\0',charspot);//puts data in big string timer counts passed
+ 388:main.c        **** 	
+ 389:main.c        **** 
+ 390:main.c        **** 	PID_heater();//run the pid on the temperature and update timer 0
+ 391:main.c        **** //	charspot = put_in_string(heat_power,'h',charspot);//puts data in big string
+ 392:main.c        **** 	charspot=spitout(charspot);//send it all out the uart
+ 393:main.c        **** }
+ 394:main.c        **** 	
+ 395:main.c        **** uint16_t readadc(void)
+ 396:main.c        **** {
+ 637               	.LM82:
+ 638               	.LFBB9:
+ 639               	/* prologue: function */
+ 640               	/* frame size = 0 */
+ 641               	/* stack size = 0 */
+ 642               	.L__stack_usage = 0
+ 397:main.c        **** 	uint8_t adcDataL = ADCL;
+ 644               	.LM83:
+ 645 0148 84B1      		in r24,36-32
+ 398:main.c        ****     uint8_t adcDataH = ADCH;
+ 647               	.LM84:
+ 648 014a 95B1      		in r25,37-32
+ 399:main.c        ****     uint16_t adcData = 0;
+ 400:main.c        ****     adcData = adcData | adcDataH;
+ 401:main.c        ****     adcData = adcData << 8;//left shift 8 spots
+ 650               	.LM85:
+ 651 014c 392F      		mov r19,r25
+ 652 014e 20E0      		ldi r18,lo8(0)
+ 402:main.c        ****     adcData = adcData | adcDataL;
+ 654               	.LM86:
+ 655 0150 90E0      		ldi r25,lo8(0)
+ 656 0152 822B      		or r24,r18
+ 657 0154 932B      		or r25,r19
+ 658               	/* epilogue start */
+ 403:main.c        ****     return adcData;
+ 404:main.c        **** }
+ 660               	.LM87:
+ 661 0156 0895      		ret
+ 667               	.Lscope9:
+ 669               	.global	PID_heater
+ 671               	PID_heater:
+ 405:main.c        **** 
+ 406:main.c        **** void PID_heater(void)
+ 407:main.c        **** {
+ 673               	.LM88:
+ 674               	.LFBB10:
+ 675               	/* prologue: function */
+ 676               	/* frame size = 0 */
+ 677               	/* stack size = 0 */
+ 678               	.L__stack_usage = 0
+ 408:main.c        **** 	int32_t calculated = pid_Controller(TARGET_TEMP, measured_temperature, &pidData_temp);  // for tem
+ 680               	.LM89:
+ 681 0158 6091 0000 		lds r22,measured_temperature
+ 682 015c 7091 0000 		lds r23,measured_temperature+1
+ 683 0160 8DEE      		ldi r24,lo8(237)
+ 684 0162 90E0      		ldi r25,hi8(237)
+ 685 0164 40E0      		ldi r20,lo8(pidData_temp)
+ 686 0166 50E0      		ldi r21,hi8(pidData_temp)
+ 687 0168 00D0      		rcall pid_Controller
+ 688 016a AA27      		clr r26
+ 689 016c 97FD      		sbrc r25,7
+ 690 016e A095      		com r26
+ 691 0170 BA2F      		mov r27,r26
+ 409:main.c        **** 
+ 410:main.c        **** 	if ((calculated) > 255 )
+ 693               	.LM90:
+ 694 0172 8F3F      		cpi r24,lo8(255)
+ 695 0174 9105      		cpc r25,__zero_reg__
+ 696 0176 A105      		cpc r26,__zero_reg__
+ 697 0178 B105      		cpc r27,__zero_reg__
+ 698 017a 01F0      		breq .L22
+ 699 017c 04F0      		brlt .L22
+ 411:main.c        **** 	{
+ 412:main.c        **** 		heat_power = 255 ;
+ 701               	.LM91:
+ 702 017e 8FEF      		ldi r24,lo8(-1)
+ 703 0180 00C0      		rjmp .L24
+ 704               	.L22:
+ 413:main.c        **** 	}
+ 414:main.c        **** 	else if ((calculated) < 0 )
+ 706               	.LM92:
+ 707 0182 B7FF      		sbrs r27,7
+ 708 0184 00C0      		rjmp .L24
+ 415:main.c        **** 	{
+ 416:main.c        **** 		heat_power = 0 ;
+ 710               	.LM93:
+ 711 0186 1092 0000 		sts heat_power,__zero_reg__
+ 712 018a 0895      		ret
+ 713               	.L24:
+ 417:main.c        **** 	}
+ 418:main.c        **** 	else
+ 419:main.c        **** 	{
+ 420:main.c        **** 		heat_power =(calculated);
+ 715               	.LM94:
+ 716 018c 8093 0000 		sts heat_power,r24
+ 717 0190 0895      		ret
+ 722               	.Lscope10:
+ 724               	.global	PID_pump
+ 726               	PID_pump:
+ 421:main.c        **** 	}
+ 422:main.c        **** 
+ 423:main.c        **** }
+ 424:main.c        **** 
+ 425:main.c        **** void PID_pump(void)
+ 426:main.c        **** {
+ 728               	.LM95:
+ 729               	.LFBB11:
+ 730 0192 0F93      		push r16
+ 731 0194 1F93      		push r17
+ 732               	/* prologue: function */
+ 733               	/* frame size = 0 */
+ 734               	/* stack size = 2 */
+ 735               	.L__stack_usage = 2
+ 427:main.c        **** int32_t calculated =  ( pid_Controller(TARGET_NERNST, nurnst, &pidData_pump) );  // PID
+ 737               	.LM96:
+ 738 0196 6091 0000 		lds r22,nurnst
+ 739 019a 7091 0000 		lds r23,nurnst+1
+ 740 019e 80E4      		ldi r24,lo8(832)
+ 741 01a0 93E0      		ldi r25,hi8(832)
+ 742 01a2 40E0      		ldi r20,lo8(pidData_pump)
+ 743 01a4 50E0      		ldi r21,hi8(pidData_pump)
+ 744 01a6 00D0      		rcall pid_Controller
+ 745 01a8 9C01      		movw r18,r24
+ 746 01aa B901      		movw r22,r18
+ 747 01ac 8827      		clr r24
+ 748 01ae 77FD      		sbrc r23,7
+ 749 01b0 8095      		com r24
+ 750 01b2 982F      		mov r25,r24
+ 428:main.c        **** calculated = (calculated/3) + 116;//116 is zero current. 
+ 752               	.LM97:
+ 753 01b4 23E0      		ldi r18,lo8(3)
+ 754 01b6 30E0      		ldi r19,hi8(3)
+ 755 01b8 40E0      		ldi r20,hlo8(3)
+ 756 01ba 50E0      		ldi r21,hhi8(3)
+ 757 01bc 00D0      		rcall __divmodsi4
+ 758 01be 8901      		movw r16,r18
+ 759 01c0 9A01      		movw r18,r20
+ 760 01c2 0C58      		subi r16,lo8(-(116))
+ 761 01c4 1F4F      		sbci r17,hi8(-(116))
+ 762 01c6 2F4F      		sbci r18,hlo8(-(116))
+ 763 01c8 3F4F      		sbci r19,hhi8(-(116))
+ 429:main.c        **** //calculated = (calculated/4) + 116;//116 is zero current. 
+ 430:main.c        **** if ((calculated) > MAXPUMP_I)
+ 765               	.LM98:
+ 766 01ca 053C      		cpi r16,lo8(197)
+ 767 01cc 1105      		cpc r17,__zero_reg__
+ 768 01ce 2105      		cpc r18,__zero_reg__
+ 769 01d0 3105      		cpc r19,__zero_reg__
+ 770 01d2 04F0      		brlt .L26
+ 431:main.c        **** 	{
+ 432:main.c        **** 		OCR1A = MAXPUMP_I;
+ 772               	.LM99:
+ 773 01d4 84EC      		ldi r24,lo8(196)
+ 774 01d6 90E0      		ldi r25,hi8(196)
+ 775 01d8 00C0      		rjmp .L29
+ 776               	.L26:
+ 433:main.c        **** 	}
+ 434:main.c        **** else if ((calculated) < MINPUMP_I)
+ 778               	.LM100:
+ 779 01da 0233      		cpi r16,lo8(50)
+ 780 01dc 1105      		cpc r17,__zero_reg__
+ 781 01de 2105      		cpc r18,__zero_reg__
+ 782 01e0 3105      		cpc r19,__zero_reg__
+ 783 01e2 04F4      		brge .L28
+ 435:main.c        **** 	{
+ 436:main.c        **** 		OCR1A = MINPUMP_I;
+ 785               	.LM101:
+ 786 01e4 82E3      		ldi r24,lo8(50)
+ 787 01e6 90E0      		ldi r25,hi8(50)
+ 788               	.L29:
+ 789 01e8 9BBD      		out 74+1-32,r25
+ 790 01ea 8ABD      		out 74-32,r24
+ 791 01ec 00C0      		rjmp .L27
+ 792               	.L28:
+ 437:main.c        **** 	}
+ 438:main.c        **** 	else
+ 439:main.c        **** 	{
+ 440:main.c        **** 		OCR1A =(calculated);
+ 794               	.LM102:
+ 795 01ee 1BBD      		out 74+1-32,r17
+ 796 01f0 0ABD      		out 74-32,r16
+ 797               	.L27:
+ 441:main.c        **** 	}
+ 442:main.c        **** 	charspot = put_in_string(OCR1A,'\0',charspot);//puts data in big string	
+ 799               	.LM103:
+ 800 01f2 8AB5      		in r24,74-32
+ 801 01f4 9BB5      		in r25,74+1-32
+ 802 01f6 4091 0000 		lds r20,charspot
+ 803 01fa 60E0      		ldi r22,lo8(0)
+ 804 01fc 00D0      		rcall put_in_string
+ 805 01fe 8093 0000 		sts charspot,r24
+ 806               	/* epilogue start */
+ 443:main.c        **** 
+ 444:main.c        **** }
+ 808               	.LM104:
+ 809 0202 1F91      		pop r17
+ 810 0204 0F91      		pop r16
+ 811 0206 0895      		ret
+ 813               	.Lscope11:
+ 814               		.data
+ 815               	.LC0:
+ 816 000b C800      		.word	200
+ 817 000d 0000      		.word	0
+ 818 000f 1801      		.word	280
+ 819 0011 4400      		.word	68
+ 820 0013 8801      		.word	392
+ 821 0015 5000      		.word	80
+ 822 0017 BA01      		.word	442
+ 823 0019 5500      		.word	85
+ 824 001b E801      		.word	488
+ 825 001d 5A00      		.word	90
+ 826 001f 3202      		.word	562
+ 827 0021 6400      		.word	100
+ 828 0023 6802      		.word	616
+ 829 0025 6E00      		.word	110
+ 830 0027 9D02      		.word	669
+ 831 0029 8F00      		.word	143
+ 832 002b C802      		.word	712
+ 833 002d AA00      		.word	170
+ 834 002f 0F03      		.word	783
+ 835 0031 F200      		.word	242
+ 836 0033 C003      		.word	960
+ 837 0035 E84E      		.word	20200
+ 838 0037 0004      		.word	1024
+ 839 0039 9065      		.word	26000
+ 840               		.text
+ 842               	.global	eight
+ 844               	eight:
+ 303:main.c        **** {
+ 846               	.LM105:
+ 847               	.LFBB12:
+ 848 0208 8F92      		push r8
+ 849 020a 9F92      		push r9
+ 850 020c AF92      		push r10
+ 851 020e BF92      		push r11
+ 852 0210 CF92      		push r12
+ 853 0212 DF92      		push r13
+ 854 0214 EF92      		push r14
+ 855 0216 FF92      		push r15
+ 856 0218 0F93      		push r16
+ 857 021a 1F93      		push r17
+ 858 021c CF93      		push r28
+ 859 021e DF93      		push r29
+ 860 0220 CDB7      		in r28,__SP_L__
+ 861 0222 DEB7      		in r29,__SP_H__
+ 862 0224 E097      		sbiw r28,48
+ 863 0226 0FB6      		in __tmp_reg__,__SREG__
+ 864 0228 F894      		cli
+ 865 022a DEBF      		out __SP_H__,r29
+ 866 022c 0FBE      		out __SREG__,__tmp_reg__
+ 867 022e CDBF      		out __SP_L__,r28
+ 868               	/* prologue: function */
+ 869               	/* frame size = 48 */
+ 870               	/* stack size = 60 */
+ 871               	.L__stack_usage = 60
+ 304:main.c        **** 	PORTB &=~ _BV(2);//back to lo
+ 873               	.LM106:
+ 874 0230 C298      		cbi 56-32,2
+ 305:main.c        **** 	DC_val = ADC_data;
+ 876               	.LM107:
+ 877 0232 8091 0000 		lds r24,ADC_data
+ 878 0236 9091 0000 		lds r25,ADC_data+1
+ 879 023a 9093 0000 		sts DC_val+1,r25
+ 880 023e 8093 0000 		sts DC_val,r24
+ 307:main.c        **** 	ADC_flag = 0;	
+ 882               	.LM108:
+ 883 0242 1092 0000 		sts ADC_flag,__zero_reg__
+ 309:main.c        **** 	PID_pump();//run PID on pump and update pump pwm.
+ 885               	.LM109:
+ 886 0246 00D0      		rcall PID_pump
+ 311:main.c        **** 	measured_temperature = (DC_val - nurnst);
+ 888               	.LM110:
+ 889 0248 8091 0000 		lds r24,DC_val
+ 890 024c 9091 0000 		lds r25,DC_val+1
+ 891 0250 2091 0000 		lds r18,nurnst
+ 892 0254 3091 0000 		lds r19,nurnst+1
+ 893 0258 821B      		sub r24,r18
+ 894 025a 930B      		sbc r25,r19
+ 312:main.c        **** 	if (measured_temperature <= 255)//make into (8-bit - 10 bit value) and prevent negatives
+ 896               	.LM111:
+ 897 025c 8F3F      		cpi r24,255
+ 898 025e 9105      		cpc r25,__zero_reg__
+ 899 0260 01F0      		breq .+2
+ 900 0262 00F4      		brsh .L31
+ 314:main.c        **** 		measured_temperature = (255 - measured_temperature);
+ 902               	.LM112:
+ 903 0264 2FEF      		ldi r18,lo8(255)
+ 904 0266 30E0      		ldi r19,hi8(255)
+ 905 0268 281B      		sub r18,r24
+ 906 026a 390B      		sbc r19,r25
+ 907 026c 3093 0000 		sts measured_temperature+1,r19
+ 908 0270 2093 0000 		sts measured_temperature,r18
+ 909 0274 00C0      		rjmp .L32
+ 910               	.L31:
+ 318:main.c        **** 		measured_temperature =0;
+ 912               	.LM113:
+ 913 0276 1092 0000 		sts measured_temperature+1,__zero_reg__
+ 914 027a 1092 0000 		sts measured_temperature,__zero_reg__
+ 915               	.L32:
+ 320:main.c        **** 	if ( (measured_temperature> (TARGET_TEMP-5))&&(measured_temperature<(TARGET_TEMP+5)) )
+ 917               	.LM114:
+ 918 027e 8091 0000 		lds r24,measured_temperature
+ 919 0282 9091 0000 		lds r25,measured_temperature+1
+ 920 0286 9C01      		movw r18,r24
+ 921 0288 295E      		subi r18,lo8(-(-233))
+ 922 028a 3040      		sbci r19,hi8(-(-233))
+ 923 028c 2930      		cpi r18,9
+ 924 028e 3105      		cpc r19,__zero_reg__
+ 925 0290 00F4      		brsh .L33
+ 322:main.c        **** 		PORTD &=~ _BV(4);//LED off
+ 927               	.LM115:
+ 928 0292 9498      		cbi 50-32,4
+ 929 0294 00C0      		rjmp .L34
+ 930               	.L33:
+ 326:main.c        **** 		PORTD |= _BV(4);//LED on
+ 932               	.LM116:
+ 933 0296 949A      		sbi 50-32,4
+ 934               	.L34:
+ 328:main.c        **** 	charspot = put_in_string(measured_temperature,'\0',charspot);//puts data in big string
+ 936               	.LM117:
+ 937 0298 4091 0000 		lds r20,charspot
+ 938 029c 60E0      		ldi r22,lo8(0)
+ 939 029e 00D0      		rcall put_in_string
+ 940 02a0 8093 0000 		sts charspot,r24
+ 334:main.c        **** 	struct two_col lambda_curve[]={	//table columns: pump, lambda(pump current ADC value, lambda)
+ 942               	.LM118:
+ 943 02a4 DE01      		movw r26,r28
+ 944 02a6 1196      		adiw r26,1
+ 945 02a8 E0E0      		ldi r30,lo8(.LC0)
+ 946 02aa F0E0      		ldi r31,hi8(.LC0)
+ 947 02ac 80E3      		ldi r24,lo8(48)
+ 948               	.L35:
+ 949 02ae 0190      		ld r0,Z+
+ 950 02b0 0D92      		st X+,r0
+ 951 02b2 8150      		subi r24,lo8(-(-1))
+ 952 02b4 01F4      		brne .L35
+ 351:main.c        **** 	if (pump<lambda_curve[0].x)//smaller than the lowest value in LOT
+ 954               	.LM119:
+ 955 02b6 C090 0000 		lds r12,pump
+ 956 02ba D090 0000 		lds r13,pump+1
+ 957 02be 8981      		ldd r24,Y+1
+ 958 02c0 9A81      		ldd r25,Y+2
+ 959 02c2 C816      		cp r12,r24
+ 960 02c4 D906      		cpc r13,r25
+ 961 02c6 00F4      		brsh .L36
+ 352:main.c        **** 	{lambda = lambda_curve[0].y;}
+ 963               	.LM120:
+ 964 02c8 4B81      		ldd r20,Y+3
+ 965 02ca 5C81      		ldd r21,Y+4
+ 966 02cc 00C0      		rjmp .L46
+ 967               	.L44:
+ 349:main.c        **** 	uint32_t lambda=0;
+ 969               	.LM121:
+ 970 02ce 40E0      		ldi r20,lo8(0)
+ 971 02d0 50E0      		ldi r21,hi8(0)
+ 972 02d2 BA01      		movw r22,r20
+ 973               	.L38:
+ 349:main.c        **** 	uint32_t lambda=0;
+ 975               	.LM122:
+ 976 02d4 10E0      		ldi r17,lo8(0)
+ 977 02d6 00C0      		rjmp .L37
+ 978               	.L36:
+ 353:main.c        **** 	else if (pump>lambda_curve[n-1].x)//larger than the highest value in the LOT
+ 980               	.LM123:
+ 981 02d8 8DA5      		ldd r24,Y+45
+ 982 02da 9EA5      		ldd r25,Y+46
+ 983 02dc 8C15      		cp r24,r12
+ 984 02de 9D05      		cpc r25,r13
+ 985 02e0 00F4      		brsh .L44
+ 354:main.c        **** 	{lambda = lambda_curve[n-1].y;}
+ 987               	.LM124:
+ 988 02e2 4FA5      		ldd r20,Y+47
+ 989 02e4 58A9      		ldd r21,Y+48
+ 990               	.L46:
+ 991 02e6 60E0      		ldi r22,lo8(0)
+ 992 02e8 70E0      		ldi r23,hi8(0)
+ 993 02ea 00C0      		rjmp .L38
+ 994               	.L40:
+ 995               	.LBB20:
+ 358:main.c        **** 		if ( lambda_curve[i].x <= pump && lambda_curve[i+1].x >= pump )
+ 997               	.LM125:
+ 998 02ec DC01      		movw r26,r24
+ 999 02ee AA0F      		lsl r26
+ 1000 02f0 BB1F      		rol r27
+ 1001 02f2 AA0F      		lsl r26
+ 1002 02f4 BB1F      		rol r27
+ 1003 02f6 21E0      		ldi r18,lo8(1)
+ 1004 02f8 30E0      		ldi r19,hi8(1)
+ 1005 02fa 2C0F      		add r18,r28
+ 1006 02fc 3D1F      		adc r19,r29
+ 1007 02fe A20F      		add r26,r18
+ 1008 0300 B31F      		adc r27,r19
+ 1009 0302 ED90      		ld r14,X+
+ 1010 0304 FC90      		ld r15,X
+ 1011 0306 1197      		sbiw r26,1
+ 1012 0308 CE14      		cp r12,r14
+ 1013 030a DF04      		cpc r13,r15
+ 1014 030c 00F0      		brlo .L39
+ 358:main.c        **** 		if ( lambda_curve[i].x <= pump && lambda_curve[i+1].x >= pump )
+ 1016               	.LM126:
+ 1017 030e FC01      		movw r30,r24
+ 1018 0310 3196      		adiw r30,1
+ 1019 0312 EE0F      		lsl r30
+ 1020 0314 FF1F      		rol r31
+ 1021 0316 EE0F      		lsl r30
+ 1022 0318 FF1F      		rol r31
+ 1023 031a E20F      		add r30,r18
+ 1024 031c F31F      		adc r31,r19
+ 1025 031e A080      		ld r10,Z
+ 1026 0320 B180      		ldd r11,Z+1
+ 1027 0322 AC14      		cp r10,r12
+ 1028 0324 BD04      		cpc r11,r13
+ 1029 0326 00F0      		brlo .L39
+ 1030               	.LBB21:
+ 362:main.c        **** 			lambda = lambda_curve[i].y + ( lambda_curve[i+1].y - lambda_curve[i].y ) * diffx / diffn; //outp
+ 1032               	.LM127:
+ 1033 0328 1296      		adiw r26,2
+ 1034 032a 8D90      		ld r8,X+
+ 1035 032c 9C90      		ld r9,X
+ 1036 032e 1397      		sbiw r26,2+1
+ 1037 0330 8281      		ldd r24,Z+2
+ 1038 0332 9381      		ldd r25,Z+3
+ 1039 0334 8819      		sub r24,r8
+ 1040 0336 9909      		sbc r25,r9
+ 360:main.c        **** 			uint16_t diffx = pump - lambda_curve[i].x; //difference between the pump value and the x value i
+ 1042               	.LM128:
+ 1043 0338 9601      		movw r18,r12
+ 1044 033a 2E19      		sub r18,r14
+ 1045 033c 3F09      		sbc r19,r15
+ 362:main.c        **** 			lambda = lambda_curve[i].y + ( lambda_curve[i+1].y - lambda_curve[i].y ) * diffx / diffn; //outp
+ 1047               	.LM129:
+ 1048 033e 829F      		mul r24,r18
+ 1049 0340 A001      		movw r20,r0
+ 1050 0342 839F      		mul r24,r19
+ 1051 0344 500D      		add r21,r0
+ 1052 0346 929F      		mul r25,r18
+ 1053 0348 500D      		add r21,r0
+ 1054 034a 1124      		clr r1
+ 361:main.c        **** 			uint16_t diffn = lambda_curve[i+1].x - lambda_curve[i].x;//spacing between the values in the LOT
+ 1056               	.LM130:
+ 1057 034c B501      		movw r22,r10
+ 1058 034e 6E19      		sub r22,r14
+ 1059 0350 7F09      		sbc r23,r15
+ 362:main.c        **** 			lambda = lambda_curve[i].y + ( lambda_curve[i+1].y - lambda_curve[i].y ) * diffx / diffn; //outp
+ 1061               	.LM131:
+ 1062 0352 CA01      		movw r24,r20
+ 1063 0354 00D0      		rcall __udivmodhi4
+ 1064 0356 680D      		add r22,r8
+ 1065 0358 791D      		adc r23,r9
+ 1066 035a AB01      		movw r20,r22
+ 1067 035c 60E0      		ldi r22,lo8(0)
+ 1068 035e 70E0      		ldi r23,hi8(0)
+ 1069               	.L39:
+ 1070               	.LBE21:
+ 356:main.c        **** 	for( uint8_t i = 0; i < n-1; i++ )//loop through table and find value
+ 1072               	.LM132:
+ 1073 0360 1F5F      		subi r17,lo8(-(1))
+ 1074               	.L37:
+ 356:main.c        **** 	for( uint8_t i = 0; i < n-1; i++ )//loop through table and find value
+ 1076               	.LM133:
+ 1077 0362 812F      		mov r24,r17
+ 1078 0364 90E0      		ldi r25,lo8(0)
+ 1079 0366 1B30      		cpi r17,lo8(11)
+ 1080 0368 01F4      		brne .L40
+ 1081               	.LBE20:
+ 1082               	.LBB22:
+ 368:main.c        **** 		box_data[i]=box_data[i+1];
+ 1084               	.LM134:
+ 1085 036a 8091 0000 		lds r24,box_data+4
+ 1086 036e 9091 0000 		lds r25,box_data+4+1
+ 1087 0372 A091 0000 		lds r26,box_data+4+2
+ 1088 0376 B091 0000 		lds r27,box_data+4+3
+ 1089 037a 8093 0000 		sts box_data,r24
+ 1090 037e 9093 0000 		sts box_data+1,r25
+ 1091 0382 A093 0000 		sts box_data+2,r26
+ 1092 0386 B093 0000 		sts box_data+3,r27
+ 1093 038a 0091 0000 		lds r16,box_data+8
+ 1094 038e 1091 0000 		lds r17,box_data+8+1
+ 1095 0392 2091 0000 		lds r18,box_data+8+2
+ 1096 0396 3091 0000 		lds r19,box_data+8+3
+ 1097 039a 0093 0000 		sts box_data+4,r16
+ 1098 039e 1093 0000 		sts box_data+4+1,r17
+ 1099 03a2 2093 0000 		sts box_data+4+2,r18
+ 1100 03a6 3093 0000 		sts box_data+4+3,r19
+ 1101               	.LBE22:
+ 370:main.c        **** 	box_data[NUM_BOXES-1] = lambda;//put in latest value
+ 1103               	.LM135:
+ 1104 03aa 4093 0000 		sts box_data+8,r20
+ 1105 03ae 5093 0000 		sts box_data+8+1,r21
+ 1106 03b2 6093 0000 		sts box_data+8+2,r22
+ 1107 03b6 7093 0000 		sts box_data+8+3,r23
+ 1108               	.LBB23:
+ 374:main.c        **** 	avrg_data_tot = avrg_data_tot+box_data[i];
+ 1110               	.LM136:
+ 1111 03ba 800F      		add r24,r16
+ 1112 03bc 911F      		adc r25,r17
+ 1113 03be A21F      		adc r26,r18
+ 1114 03c0 B31F      		adc r27,r19
+ 1115 03c2 840F      		add r24,r20
+ 1116 03c4 951F      		adc r25,r21
+ 1117 03c6 A61F      		adc r26,r22
+ 1118 03c8 B71F      		adc r27,r23
+ 1119               	.LBE23:
+ 376:main.c        **** 	lambda = avrg_data_tot/NUM_BOXES;//get averaged value
+ 1121               	.LM137:
+ 1122 03ca BC01      		movw r22,r24
+ 1123 03cc CD01      		movw r24,r26
+ 1124 03ce 23E0      		ldi r18,lo8(3)
+ 1125 03d0 30E0      		ldi r19,hi8(3)
+ 1126 03d2 40E0      		ldi r20,hlo8(3)
+ 1127 03d4 50E0      		ldi r21,hhi8(3)
+ 1128 03d6 00D0      		rcall __udivmodsi4
+ 1129 03d8 6901      		movw r12,r18
+ 1130 03da 7A01      		movw r14,r20
+ 378:main.c        **** 	charspot = put_in_string(lambda,'\0',charspot);//puts data in big string
+ 1132               	.LM138:
+ 1133 03dc 4091 0000 		lds r20,charspot
+ 1134 03e0 C601      		movw r24,r12
+ 1135 03e2 60E0      		ldi r22,lo8(0)
+ 1136 03e4 00D0      		rcall put_in_string
+ 1137 03e6 8093 0000 		sts charspot,r24
+ 379:main.c        **** 	if((lambda>=LAMBDA_MIN) && (lambda<=LAMBDA_MAX))
+ 1139               	.LM139:
+ 1140 03ea D701      		movw r26,r14
+ 1141 03ec C601      		movw r24,r12
+ 1142 03ee C297      		sbiw r24,50
+ 1143 03f0 A109      		sbc r26,__zero_reg__
+ 1144 03f2 B109      		sbc r27,__zero_reg__
+ 1145 03f4 833C      		cpi r24,lo8(451)
+ 1146 03f6 31E0      		ldi r19,hi8(451)
+ 1147 03f8 9307      		cpc r25,r19
+ 1148 03fa 30E0      		ldi r19,hlo8(451)
+ 1149 03fc A307      		cpc r26,r19
+ 1150 03fe 30E0      		ldi r19,hhi8(451)
+ 1151 0400 B307      		cpc r27,r19
+ 1152 0402 00F4      		brsh .L41
+ 1153               	.LBB24:
+ 381:main.c        **** 		uint32_t dacval = (lambda-LAMBDA_MIN)*DAC_FACTOR;
+ 1155               	.LM140:
+ 1156 0404 C701      		movw r24,r14
+ 1157 0406 B601      		movw r22,r12
+ 1158 0408 20EF      		ldi r18,lo8(2550000)
+ 1159 040a 38EE      		ldi r19,hi8(2550000)
+ 1160 040c 46E2      		ldi r20,hlo8(2550000)
+ 1161 040e 50E0      		ldi r21,hhi8(2550000)
+ 1162 0410 00D0      		rcall __mulsi3
+ 1163 0412 605E      		subi r22,lo8(-(-127500000))
+ 1164 0414 7E47      		sbci r23,hi8(-(-127500000))
+ 1165 0416 8949      		sbci r24,hlo8(-(-127500000))
+ 1166 0418 9740      		sbci r25,hhi8(-(-127500000))
+ 1167 041a 22EC      		ldi r18,lo8(450)
+ 1168 041c 31E0      		ldi r19,hi8(450)
+ 1169 041e 40E0      		ldi r20,hlo8(450)
+ 1170 0420 50E0      		ldi r21,hhi8(450)
+ 1171 0422 00D0      		rcall __udivmodsi4
+ 382:main.c        **** 		zero_to_5_WB = dacval/10000UL;
+ 1173               	.LM141:
+ 1174 0424 CA01      		movw r24,r20
+ 1175 0426 B901      		movw r22,r18
+ 1176 0428 20E1      		ldi r18,lo8(10000)
+ 1177 042a 37E2      		ldi r19,hi8(10000)
+ 1178 042c 40E0      		ldi r20,hlo8(10000)
+ 1179 042e 50E0      		ldi r21,hhi8(10000)
+ 1180 0430 00D0      		rcall __udivmodsi4
+ 1181 0432 2093 0000 		sts zero_to_5_WB,r18
+ 1182 0436 3093 0000 		sts zero_to_5_WB+1,r19
+ 1183 043a 4093 0000 		sts zero_to_5_WB+2,r20
+ 1184 043e 5093 0000 		sts zero_to_5_WB+3,r21
+ 1185 0442 00C0      		rjmp .L42
+ 1186               	.L41:
+ 1187               	.LBE24:
+ 384:main.c        **** 	else if (lambda>LAMBDA_MAX){zero_to_5_WB = 255;}
+ 1189               	.LM142:
+ 1190 0444 85EF      		ldi r24,lo8(501)
+ 1191 0446 C816      		cp r12,r24
+ 1192 0448 81E0      		ldi r24,hi8(501)
+ 1193 044a D806      		cpc r13,r24
+ 1194 044c 80E0      		ldi r24,hlo8(501)
+ 1195 044e E806      		cpc r14,r24
+ 1196 0450 80E0      		ldi r24,hhi8(501)
+ 1197 0452 F806      		cpc r15,r24
+ 1198 0454 00F0      		brlo .L43
+ 384:main.c        **** 	else if (lambda>LAMBDA_MAX){zero_to_5_WB = 255;}
+ 1200               	.LM143:
+ 1201 0456 8FEF      		ldi r24,lo8(255)
+ 1202 0458 90E0      		ldi r25,hi8(255)
+ 1203 045a A0E0      		ldi r26,hlo8(255)
+ 1204 045c B0E0      		ldi r27,hhi8(255)
+ 1205 045e 8093 0000 		sts zero_to_5_WB,r24
+ 1206 0462 9093 0000 		sts zero_to_5_WB+1,r25
+ 1207 0466 A093 0000 		sts zero_to_5_WB+2,r26
+ 1208 046a B093 0000 		sts zero_to_5_WB+3,r27
+ 1209 046e 00C0      		rjmp .L42
+ 1210               	.L43:
+ 385:main.c        **** 	else {zero_to_5_WB = 0;}
+ 1212               	.LM144:
+ 1213 0470 1092 0000 		sts zero_to_5_WB,__zero_reg__
+ 1214 0474 1092 0000 		sts zero_to_5_WB+1,__zero_reg__
+ 1215 0478 1092 0000 		sts zero_to_5_WB+2,__zero_reg__
+ 1216 047c 1092 0000 		sts zero_to_5_WB+3,__zero_reg__
+ 1217               	.L42:
+ 386:main.c        **** 	OCR2 = zero_to_5_WB;// set DAC output
+ 1219               	.LM145:
+ 1220 0480 8091 0000 		lds r24,zero_to_5_WB
+ 1221 0484 83BD      		out 67-32,r24
+ 387:main.c        **** 	charspot = put_in_string(zero_to_5_WB,'\0',charspot);//puts data in big string timer counts passed
+ 1223               	.LM146:
+ 1224 0486 4091 0000 		lds r20,charspot
+ 1225 048a 8091 0000 		lds r24,zero_to_5_WB
+ 1226 048e 9091 0000 		lds r25,zero_to_5_WB+1
+ 1227 0492 60E0      		ldi r22,lo8(0)
+ 1228 0494 00D0      		rcall put_in_string
+ 1229 0496 8093 0000 		sts charspot,r24
+ 390:main.c        **** 	PID_heater();//run the pid on the temperature and update timer 0
+ 1231               	.LM147:
+ 1232 049a 00D0      		rcall PID_heater
+ 392:main.c        **** 	charspot=spitout(charspot);//send it all out the uart
+ 1234               	.LM148:
+ 1235 049c 8091 0000 		lds r24,charspot
+ 1236 04a0 00D0      		rcall spitout
+ 1237 04a2 8093 0000 		sts charspot,r24
+ 1238               	/* epilogue start */
+ 393:main.c        **** }
+ 1240               	.LM149:
+ 1241 04a6 E096      		adiw r28,48
+ 1242 04a8 0FB6      		in __tmp_reg__,__SREG__
+ 1243 04aa F894      		cli
+ 1244 04ac DEBF      		out __SP_H__,r29
+ 1245 04ae 0FBE      		out __SREG__,__tmp_reg__
+ 1246 04b0 CDBF      		out __SP_L__,r28
+ 1247 04b2 DF91      		pop r29
+ 1248 04b4 CF91      		pop r28
+ 1249 04b6 1F91      		pop r17
+ 1250 04b8 0F91      		pop r16
+ 1251 04ba FF90      		pop r15
+ 1252 04bc EF90      		pop r14
+ 1253 04be DF90      		pop r13
+ 1254 04c0 CF90      		pop r12
+ 1255 04c2 BF90      		pop r11
+ 1256 04c4 AF90      		pop r10
+ 1257 04c6 9F90      		pop r9
+ 1258 04c8 8F90      		pop r8
+ 1259 04ca 0895      		ret
+ 1267               	.Lscope12:
+ 1269               	.global	__vector_14
+ 1271               	__vector_14:
+ 110:main.c        **** {
+ 1273               	.LM150:
+ 1274               	.LFBB13:
+ 1275 04cc 1F92      		push r1
+ 1276 04ce 0F92      		push r0
+ 1277 04d0 0FB6      		in r0,__SREG__
+ 1278 04d2 0F92      		push r0
+ 1279 04d4 1124      		clr __zero_reg__
+ 1280 04d6 2F93      		push r18
+ 1281 04d8 3F93      		push r19
+ 1282 04da 4F93      		push r20
+ 1283 04dc 5F93      		push r21
+ 1284 04de 6F93      		push r22
+ 1285 04e0 7F93      		push r23
+ 1286 04e2 8F93      		push r24
+ 1287 04e4 9F93      		push r25
+ 1288 04e6 AF93      		push r26
+ 1289 04e8 BF93      		push r27
+ 1290 04ea EF93      		push r30
+ 1291 04ec FF93      		push r31
+ 1292               	/* prologue: Signal */
+ 1293               	/* frame size = 0 */
+ 1294               	/* stack size = 15 */
+ 1295               	.L__stack_usage = 15
+ 111:main.c        **** ADC_data = readadc();
+ 1297               	.LM151:
+ 1298 04ee 00D0      		rcall readadc
+ 1299 04f0 9093 0000 		sts ADC_data+1,r25
+ 1300 04f4 8093 0000 		sts ADC_data,r24
+ 113:main.c        **** if (ADC_flag == 7)//
+ 1302               	.LM152:
+ 1303 04f8 8091 0000 		lds r24,ADC_flag
+ 1304 04fc 8730      		cpi r24,lo8(7)
+ 1305 04fe 01F4      		brne .L48
+ 115:main.c        **** 	four();
+ 1307               	.LM153:
+ 1308 0500 00D0      		rcall four
+ 1309 0502 00C0      		rjmp .L47
+ 1310               	.L48:
+ 117:main.c        **** else if (ADC_flag == 2)
+ 1312               	.LM154:
+ 1313 0504 8091 0000 		lds r24,ADC_flag
+ 1314 0508 8230      		cpi r24,lo8(2)
+ 1315 050a 01F4      		brne .L50
+ 119:main.c        **** 	six_1();
+ 1317               	.LM155:
+ 1318 050c 00D0      		rcall six_1
+ 1319 050e 00C0      		rjmp .L47
+ 1320               	.L50:
+ 121:main.c        **** else if (ADC_flag == 8)
+ 1322               	.LM156:
+ 1323 0510 8091 0000 		lds r24,ADC_flag
+ 1324 0514 8830      		cpi r24,lo8(8)
+ 1325 0516 01F4      		brne .L51
+ 123:main.c        **** 	six_2();
+ 1327               	.LM157:
+ 1328 0518 00D0      		rcall six_2
+ 1329 051a 00C0      		rjmp .L47
+ 1330               	.L51:
+ 125:main.c        **** else if (ADC_flag == 9)
+ 1332               	.LM158:
+ 1333 051c 8091 0000 		lds r24,ADC_flag
+ 1334 0520 8930      		cpi r24,lo8(9)
+ 1335 0522 01F4      		brne .L52
+ 127:main.c        **** 	six_3();
+ 1337               	.LM159:
+ 1338 0524 00D0      		rcall six_3
+ 1339 0526 00C0      		rjmp .L47
+ 1340               	.L52:
+ 130:main.c        **** else if (ADC_flag == 3)//nurnst
+ 1342               	.LM160:
+ 1343 0528 8091 0000 		lds r24,ADC_flag
+ 1344 052c 8330      		cpi r24,lo8(3)
+ 1345 052e 01F4      		brne .L53
+ 132:main.c        **** 	seven();
+ 1347               	.LM161:
+ 1348 0530 00D0      		rcall seven
+ 1349 0532 00C0      		rjmp .L47
+ 1350               	.L53:
+ 134:main.c        **** else if (ADC_flag == 4)//nurnst+DC and calculations
+ 1352               	.LM162:
+ 1353 0534 8091 0000 		lds r24,ADC_flag
+ 1354 0538 8430      		cpi r24,lo8(4)
+ 1355 053a 01F4      		brne .L54
+ 136:main.c        **** 	eight();
+ 1357               	.LM163:
+ 1358 053c 00D0      		rcall eight
+ 1359 053e 00C0      		rjmp .L47
+ 1360               	.L54:
+ 141:main.c        **** 		ADC_data = readadc();//make sure adc is read to clear 
+ 1362               	.LM164:
+ 1363 0540 00D0      		rcall readadc
+ 1364 0542 9093 0000 		sts ADC_data+1,r25
+ 1365 0546 8093 0000 		sts ADC_data,r24
+ 1366               	.L47:
+ 1367               	/* epilogue start */
+ 143:main.c        **** }
+ 1369               	.LM165:
+ 1370 054a FF91      		pop r31
+ 1371 054c EF91      		pop r30
+ 1372 054e BF91      		pop r27
+ 1373 0550 AF91      		pop r26
+ 1374 0552 9F91      		pop r25
+ 1375 0554 8F91      		pop r24
+ 1376 0556 7F91      		pop r23
+ 1377 0558 6F91      		pop r22
+ 1378 055a 5F91      		pop r21
+ 1379 055c 4F91      		pop r20
+ 1380 055e 3F91      		pop r19
+ 1381 0560 2F91      		pop r18
+ 1382 0562 0F90      		pop r0
+ 1383 0564 0FBE      		out __SREG__,r0
+ 1384 0566 0F90      		pop r0
+ 1385 0568 1F90      		pop r1
+ 1386 056a 1895      		reti
+ 1388               	.Lscope13:
+ 1389               		.comm pidData_pump,18,1
+ 1390               		.comm pidData_temp,18,1
+ 1391               		.comm pidCounter,1,1
+ 1392               	.global	rampcounter
+ 1393               	.global	rampcounter
+ 1394               		.section .bss
+ 1397               	rampcounter:
+ 1398 0000 00        		.skip 1,0
+ 1399               	.global	charspot
+ 1400               	.global	charspot
+ 1403               	charspot:
+ 1404 0001 00        		.skip 1,0
+ 1405               		.comm ADC_flag,1,1
+ 1406               		.comm its_off,1,1
+ 1407               	.global	ramp_flag
+ 1408               	.global	ramp_flag
+ 1411               	ramp_flag:
+ 1412 0002 00        		.skip 1,0
+ 1413               		.comm zero_to_5_WB,4,1
+ 1414               		.comm measured_temperature,2,1
+ 1415               	.global	IpumpVolts
+ 1416               	.global	IpumpVolts
+ 1419               	IpumpVolts:
+ 1420 0003 0000      		.skip 2,0
+ 1421               	.global	DC_val
+ 1422               	.global	DC_val
+ 1425               	DC_val:
+ 1426 0005 0000      		.skip 2,0
+ 1427               	.global	pump
+ 1428               	.global	pump
+ 1431               	pump:
+ 1432 0007 0000      		.skip 2,0
+ 1433               	.global	nurnst
+ 1434               	.global	nurnst
+ 1437               	nurnst:
+ 1438 0009 0000      		.skip 2,0
+ 1439               		.comm ADC_data,2,1
+ 1440               		.comm heat_power,1,1
+ 1441               		.comm box_data,12,1
+ 1442               		.comm serialout,50,1
+ 1461               		.text
+ 1463               	.Letext0:
+DEFINED SYMBOLS
+                            *ABS*:00000000 main.c
+     /tmp/ccwCdkee.s:2      *ABS*:0000003f __SREG__
+     /tmp/ccwCdkee.s:3      *ABS*:0000003e __SP_H__
+     /tmp/ccwCdkee.s:4      *ABS*:0000003d __SP_L__
+     /tmp/ccwCdkee.s:5      *ABS*:00000034 __CCP__
+     /tmp/ccwCdkee.s:6      *ABS*:00000000 __tmp_reg__
+     /tmp/ccwCdkee.s:7      *ABS*:00000001 __zero_reg__
+     /tmp/ccwCdkee.s:127    .text.startup:00000000 main
+                            *COM*:00000012 pidData_temp
+                            *COM*:00000012 pidData_pump
+                            *COM*:00000001 heat_power
+     /tmp/ccwCdkee.s:1411   .bss:00000002 ramp_flag
+     /tmp/ccwCdkee.s:298    .text:00000000 do_things
+                            *COM*:00000001 ADC_flag
+     /tmp/ccwCdkee.s:347    .text:0000001e __vector_9
+                            *COM*:00000001 its_off
+     /tmp/ccwCdkee.s:450    .text:00000090 four
+     /tmp/ccwCdkee.s:478    .text:0000009e six_1
+                            *COM*:00000002 ADC_data
+     /tmp/ccwCdkee.s:1431   .bss:00000007 pump
+     /tmp/ccwCdkee.s:508    .text:000000b8 six_2
+     /tmp/ccwCdkee.s:542    .text:000000de six_3
+     /tmp/ccwCdkee.s:1403   .bss:00000001 charspot
+     /tmp/ccwCdkee.s:592    .text:0000011c seven
+     /tmp/ccwCdkee.s:1437   .bss:00000009 nurnst
+     /tmp/ccwCdkee.s:635    .text:00000148 readadc
+     /tmp/ccwCdkee.s:671    .text:00000158 PID_heater
+                            *COM*:00000002 measured_temperature
+     /tmp/ccwCdkee.s:726    .text:00000192 PID_pump
+     /tmp/ccwCdkee.s:844    .text:00000208 eight
+     /tmp/ccwCdkee.s:1425   .bss:00000005 DC_val
+                            *COM*:0000000c box_data
+                            *COM*:00000004 zero_to_5_WB
+     /tmp/ccwCdkee.s:1271   .text:000004cc __vector_14
+                            *COM*:00000001 pidCounter
+     /tmp/ccwCdkee.s:1397   .bss:00000000 rampcounter
+     /tmp/ccwCdkee.s:1419   .bss:00000003 IpumpVolts
+                            *COM*:00000032 serialout
+
+UNDEFINED SYMBOLS
+__do_copy_data
+__do_clear_bss
+setup_timer1
+setup_timer2
+pid_Init
+adc_init
+timer0init
+uart_putst
+uart_put16dec
+uart_putch
+__udivmodhi4
+put_in_string
+pid_Controller
+__divmodsi4
+__udivmodsi4
+__mulsi3
+spitout

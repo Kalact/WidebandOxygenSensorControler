@@ -1,0 +1,460 @@
+   1               		.file	"dataout.c"
+   2               	__SREG__ = 0x3f
+   3               	__SP_H__ = 0x3e
+   4               	__SP_L__ = 0x3d
+   5               	__CCP__ = 0x34
+   6               	__tmp_reg__ = 0
+   7               	__zero_reg__ = 1
+   8               		.global __do_copy_data
+   9               		.global __do_clear_bss
+  11               		.text
+  12               	.Ltext0:
+ 117               		.data
+ 118               	.LC1:
+ 119 0000 6F76 6572 		.string	"over"
+ 119      00
+ 120               	.LC0:
+ 121 0005 00        		.string	""
+ 122 0006 00        		.string	""
+ 123 0007 00        		.string	""
+ 124 0008 00        		.string	""
+ 125 0009 00        		.string	""
+ 126 000a 00        		.string	""
+ 127               		.text
+ 132               	.global	put_in_string
+ 134               	put_in_string:
+   1:dataout.c     **** 
+   2:dataout.c     **** #include "dataout.h"
+   3:dataout.c     **** 
+   4:dataout.c     **** uint8_t put_in_string(int16_t number, char letter, uint8_t place)//place is 4 digit spotplus 2 for 
+   5:dataout.c     **** {
+ 136               	.LM0:
+ 137               	.LFBB1:
+ 138 0000 0F93      		push r16
+ 139 0002 1F93      		push r17
+ 140 0004 CF93      		push r28
+ 141 0006 DF93      		push r29
+ 142 0008 00D0      		rcall .
+ 143 000a 00D0      		rcall .
+ 144 000c 0F92      		push __tmp_reg__
+ 145 000e CDB7      		in r28,__SP_L__
+ 146 0010 DEB7      		in r29,__SP_H__
+ 147               	/* prologue: function */
+ 148               	/* frame size = 5 */
+ 149               	/* stack size = 9 */
+ 150               	.L__stack_usage = 9
+ 151 0012 062F      		mov r16,r22
+ 152 0014 142F      		mov r17,r20
+   6:dataout.c     **** 	//
+   7:dataout.c     **** 	//'place' is the target place for the next character
+   8:dataout.c     **** 	//
+   9:dataout.c     **** 	//
+  10:dataout.c     **** 	char temps[5] = "\0\0\0\0\0";//temporary spot for the number to add to the big string 
+ 154               	.LM1:
+ 155 0016 DE01      		movw r26,r28
+ 156 0018 1196      		adiw r26,1
+ 157 001a E0E0      		ldi r30,lo8(.LC0)
+ 158 001c F0E0      		ldi r31,hi8(.LC0)
+ 159 001e 25E0      		ldi r18,lo8(5)
+ 160               	.L2:
+ 161 0020 0190      		ld r0,Z+
+ 162 0022 0D92      		st X+,r0
+ 163 0024 2150      		subi r18,lo8(-(-1))
+ 164 0026 01F4      		brne .L2
+  11:dataout.c     **** 
+  12:dataout.c     **** 	if (number <= 9999 || number<= -9999)
+ 166               	.LM2:
+ 167 0028 27E2      		ldi r18,hi8(10000)
+ 168 002a 8031      		cpi r24,lo8(10000)
+ 169 002c 9207      		cpc r25,r18
+ 170 002e 04F4      		brge .L3
+  13:dataout.c     **** 	{
+  14:dataout.c     **** 		//ultoa
+  15:dataout.c     **** 		itoa(number, temps, 10); // integer number --> string temps base 10
+ 172               	.LM3:
+ 173 0030 BE01      		movw r22,r28
+ 174 0032 6F5F      		subi r22,lo8(-(1))
+ 175 0034 7F4F      		sbci r23,hi8(-(1))
+ 176 0036 4AE0      		ldi r20,lo8(10)
+ 177 0038 50E0      		ldi r21,hi8(10)
+ 178 003a 00D0      		rcall itoa
+ 179 003c 00C0      		rjmp .L4
+ 180               	.L3:
+  16:dataout.c     **** 	}
+  17:dataout.c     **** 	else
+  18:dataout.c     **** 	{
+  19:dataout.c     **** 		strcpy(temps,"over");// only 4 digits plus sign allowed
+ 182               	.LM4:
+ 183 003e CE01      		movw r24,r28
+ 184 0040 0196      		adiw r24,1
+ 185 0042 60E0      		ldi r22,lo8(.LC1)
+ 186 0044 70E0      		ldi r23,hi8(.LC1)
+ 187 0046 00D0      		rcall strcpy
+ 188               	.L4:
+  20:dataout.c     **** 	}
+  21:dataout.c     **** 	uint8_t datalen = strlen(temps);//actual legnth of ADC data
+ 190               	.LM5:
+ 191 0048 DE01      		movw r26,r28
+ 192 004a 1196      		adiw r26,1
+ 193 004c FD01      		movw r30,r26
+ 194 004e 0190      		ld __tmp_reg__,Z+
+ 195 0050 0020      		tst __tmp_reg__
+ 196 0052 01F4      		brne .-6
+ 197 0054 3197      		sbiw r30,1
+ 198 0056 8E2F      		mov r24,r30
+ 199 0058 8A1B      		sub r24,r26
+  22:dataout.c     **** 	if (letter != '\0')//dont put in the letter and the colon if '\0'
+ 201               	.LM6:
+ 202 005a 0023      		tst r16
+ 203 005c 01F0      		breq .L5
+  23:dataout.c     **** 		{
+  24:dataout.c     **** 		serialout[place] = letter;
+ 205               	.LM7:
+ 206 005e E12F      		mov r30,r17
+ 207 0060 F0E0      		ldi r31,lo8(0)
+ 208 0062 E050      		subi r30,lo8(-(serialout))
+ 209 0064 F040      		sbci r31,hi8(-(serialout))
+ 210 0066 0083      		st Z,r16
+  25:dataout.c     **** 		place++;
+ 212               	.LM8:
+ 213 0068 1F5F      		subi r17,lo8(-(1))
+  26:dataout.c     **** 		serialout[place] = ':';
+ 215               	.LM9:
+ 216 006a E12F      		mov r30,r17
+ 217 006c F0E0      		ldi r31,lo8(0)
+ 218 006e E050      		subi r30,lo8(-(serialout))
+ 219 0070 F040      		sbci r31,hi8(-(serialout))
+ 220 0072 9AE3      		ldi r25,lo8(58)
+ 221 0074 9083      		st Z,r25
+ 222 0076 00C0      		rjmp .L6
+ 223               	.L5:
+  27:dataout.c     **** 		}
+  28:dataout.c     **** 	else 
+  29:dataout.c     **** 	{
+  30:dataout.c     **** 	place--;
+ 225               	.LM10:
+ 226 0078 1150      		subi r17,lo8(-(-1))
+ 227               	.L6:
+ 229               	.LM11:
+ 230 007a 9E01      		movw r18,r28
+ 231 007c 2F5F      		subi r18,lo8(-(1))
+ 232 007e 3F4F      		sbci r19,hi8(-(1))
+   5:dataout.c     **** {
+ 234               	.LM12:
+ 235 0080 F901      		movw r30,r18
+ 236 0082 912F      		mov r25,r17
+ 237 0084 00C0      		rjmp .L7
+ 238               	.L8:
+ 239               	.LBB2:
+  31:dataout.c     **** 	}
+  32:dataout.c     **** 	for (uint8_t i=0; i<datalen; i++) 
+  33:dataout.c     **** 	{
+  34:dataout.c     **** 		place++;
+ 241               	.LM13:
+ 242 0086 9F5F      		subi r25,lo8(-(1))
+  35:dataout.c     **** 		serialout[place] = temps[i];
+ 244               	.LM14:
+ 245 0088 4191      		ld r20,Z+
+ 246 008a A92F      		mov r26,r25
+ 247 008c B0E0      		ldi r27,lo8(0)
+ 248 008e A050      		subi r26,lo8(-(serialout))
+ 249 0090 B040      		sbci r27,hi8(-(serialout))
+ 250 0092 4C93      		st X,r20
+ 251               	.L7:
+  32:dataout.c     **** 	for (uint8_t i=0; i<datalen; i++) 
+ 253               	.LM15:
+ 254 0094 4E2F      		mov r20,r30
+ 255 0096 421B      		sub r20,r18
+ 256 0098 4817      		cp r20,r24
+ 257 009a 00F0      		brlo .L8
+  32:dataout.c     **** 	for (uint8_t i=0; i<datalen; i++) 
+ 259               	.LM16:
+ 260 009c 180F      		add r17,r24
+ 261               	.LBE2:
+  36:dataout.c     **** 		
+  37:dataout.c     **** 	}
+  38:dataout.c     **** 	place++;
+ 263               	.LM17:
+ 264 009e E12F      		mov r30,r17
+ 265 00a0 EF5F      		subi r30,lo8(-(1))
+  39:dataout.c     **** 	serialout[place] = ','; 
+ 267               	.LM18:
+ 268 00a2 F0E0      		ldi r31,lo8(0)
+ 269 00a4 E050      		subi r30,lo8(-(serialout))
+ 270 00a6 F040      		sbci r31,hi8(-(serialout))
+ 271 00a8 8CE2      		ldi r24,lo8(44)
+ 272 00aa 8083      		st Z,r24
+  40:dataout.c     **** 	return  (place+1);
+  41:dataout.c     **** 	
+  42:dataout.c     **** }
+ 274               	.LM19:
+ 275 00ac 812F      		mov r24,r17
+ 276 00ae 8E5F      		subi r24,lo8(-(2))
+ 277               	/* epilogue start */
+ 278 00b0 0F90      		pop __tmp_reg__
+ 279 00b2 0F90      		pop __tmp_reg__
+ 280 00b4 0F90      		pop __tmp_reg__
+ 281 00b6 0F90      		pop __tmp_reg__
+ 282 00b8 0F90      		pop __tmp_reg__
+ 283 00ba DF91      		pop r29
+ 284 00bc CF91      		pop r28
+ 285 00be 1F91      		pop r17
+ 286 00c0 0F91      		pop r16
+ 287 00c2 0895      		ret
+ 293               	.Lscope1:
+ 296               	.global	uart_putch
+ 298               	uart_putch:
+  43:dataout.c     **** 
+  44:dataout.c     **** void uart_putch(uint8_t c)
+  45:dataout.c     **** {
+ 300               	.LM20:
+ 301               	.LFBB2:
+ 302               	/* prologue: function */
+ 303               	/* frame size = 0 */
+ 304               	/* stack size = 0 */
+ 305               	.L__stack_usage = 0
+ 306               	.L11:
+  46:dataout.c     ****     //if(c == '\n')
+  47:dataout.c     ****      //   uart_putc('\r');
+  48:dataout.c     **** 
+  49:dataout.c     ****     /* wait until transmit buffer is empty */
+  50:dataout.c     ****     while(!(UCSRA & (1 << UDRE)));
+ 308               	.LM21:
+ 309 00c4 5D9B      		sbis 43-32,5
+ 310 00c6 00C0      		rjmp .L11
+  51:dataout.c     ****     /* send next byte */
+  52:dataout.c     ****     UDR = c;
+ 312               	.LM22:
+ 313 00c8 8CB9      		out 44-32,r24
+ 314               	/* epilogue start */
+  53:dataout.c     **** }
+ 316               	.LM23:
+ 317 00ca 0895      		ret
+ 319               	.Lscope2:
+ 321               	.global	uart_putst
+ 323               	uart_putst:
+  54:dataout.c     **** 
+  55:dataout.c     **** void uart_putst(const char* s)
+  56:dataout.c     **** {
+ 325               	.LM24:
+ 326               	.LFBB3:
+ 327 00cc CF93      		push r28
+ 328 00ce DF93      		push r29
+ 329               	/* prologue: function */
+ 330               	/* frame size = 0 */
+ 331               	/* stack size = 2 */
+ 332               	.L__stack_usage = 2
+ 334               	.LM25:
+ 335 00d0 EC01      		movw r28,r24
+  57:dataout.c     ****     while(*s)
+ 337               	.LM26:
+ 338 00d2 00C0      		rjmp .L14
+ 339               	.L15:
+  58:dataout.c     ****         uart_putch(*s++);
+ 341               	.LM27:
+ 342 00d4 00D0      		rcall uart_putch
+ 343               	.L14:
+  57:dataout.c     ****     while(*s)
+ 345               	.LM28:
+ 346 00d6 8991      		ld r24,Y+
+ 347 00d8 8823      		tst r24
+ 348 00da 01F4      		brne .L15
+ 349               	/* epilogue start */
+  59:dataout.c     **** }
+ 351               	.LM29:
+ 352 00dc DF91      		pop r29
+ 353 00de CF91      		pop r28
+ 354 00e0 0895      		ret
+ 356               	.Lscope3:
+ 359               	.global	uart_put16dec
+ 361               	uart_put16dec:
+  60:dataout.c     **** 
+  61:dataout.c     **** void uart_put16dec(uint16_t d)
+  62:dataout.c     **** {
+ 363               	.LM30:
+ 364               	.LFBB4:
+ 365 00e2 BF92      		push r11
+ 366 00e4 CF92      		push r12
+ 367 00e6 DF92      		push r13
+ 368 00e8 EF92      		push r14
+ 369 00ea FF92      		push r15
+ 370 00ec 0F93      		push r16
+ 371 00ee 1F93      		push r17
+ 372 00f0 CF93      		push r28
+ 373 00f2 DF93      		push r29
+ 374               	/* prologue: function */
+ 375               	/* frame size = 0 */
+ 376               	/* stack size = 9 */
+ 377               	.L__stack_usage = 9
+ 378 00f4 8C01      		movw r16,r24
+ 380               	.LM31:
+ 381 00f6 25E0      		ldi r18,lo8(5)
+ 382 00f8 E22E      		mov r14,r18
+ 383 00fa F12C      		mov r15,__zero_reg__
+  63:dataout.c     ****     uint16_t num = 10000;
+  64:dataout.c     ****     uint8_t started = 0;
+ 385               	.LM32:
+ 386 00fc 20E0      		ldi r18,lo8(0)
+  63:dataout.c     ****     uint16_t num = 10000;
+ 388               	.LM33:
+ 389 00fe C0E1      		ldi r28,lo8(10000)
+ 390 0100 D7E2      		ldi r29,hi8(10000)
+ 391               	.LBB3:
+  65:dataout.c     **** 
+  66:dataout.c     ****     while(num > 0)
+  67:dataout.c     ****     {
+  68:dataout.c     ****         uint8_t b = d / num;
+  69:dataout.c     ****         if(b > 0 || started || num == 1)
+  70:dataout.c     ****         {
+  71:dataout.c     ****             uart_putch('0' + b);
+  72:dataout.c     ****             started = 1;
+  73:dataout.c     ****         }
+  74:dataout.c     ****         d -= b * num;
+  75:dataout.c     **** 
+  76:dataout.c     ****         num /= 10;
+ 393               	.LM34:
+ 394 0102 3AE0      		ldi r19,lo8(10)
+ 395 0104 C32E      		mov r12,r19
+ 396 0106 D12C      		mov r13,__zero_reg__
+ 397               	.L19:
+  68:dataout.c     ****         uint8_t b = d / num;
+ 399               	.LM35:
+ 400 0108 C801      		movw r24,r16
+ 401 010a BE01      		movw r22,r28
+ 402 010c 00D0      		rcall __udivmodhi4
+ 403 010e B62E      		mov r11,r22
+  69:dataout.c     ****         if(b > 0 || started || num == 1)
+ 405               	.LM36:
+ 406 0110 6623      		tst r22
+ 407 0112 01F4      		brne .L17
+  69:dataout.c     ****         if(b > 0 || started || num == 1)
+ 409               	.LM37:
+ 410 0114 2223      		tst r18
+ 411 0116 01F4      		brne .L17
+ 412 0118 C130      		cpi r28,1
+ 413 011a D105      		cpc r29,__zero_reg__
+ 414 011c 01F4      		brne .L18
+ 415               	.L17:
+  71:dataout.c     ****             uart_putch('0' + b);
+ 417               	.LM38:
+ 418 011e 8B2D      		mov r24,r11
+ 419 0120 805D      		subi r24,lo8(-(48))
+ 420 0122 00D0      		rcall uart_putch
+  72:dataout.c     ****             started = 1;
+ 422               	.LM39:
+ 423 0124 21E0      		ldi r18,lo8(1)
+ 424               	.L18:
+  74:dataout.c     ****         d -= b * num;
+ 426               	.LM40:
+ 427 0126 6B2D      		mov r22,r11
+ 428 0128 70E0      		ldi r23,lo8(0)
+ 429 012a 6C9F      		mul r22,r28
+ 430 012c C001      		movw r24,r0
+ 431 012e 6D9F      		mul r22,r29
+ 432 0130 900D      		add r25,r0
+ 433 0132 7C9F      		mul r23,r28
+ 434 0134 900D      		add r25,r0
+ 435 0136 1124      		clr r1
+ 436 0138 081B      		sub r16,r24
+ 437 013a 190B      		sbc r17,r25
+ 439               	.LM41:
+ 440 013c CE01      		movw r24,r28
+ 441 013e B601      		movw r22,r12
+ 442 0140 00D0      		rcall __udivmodhi4
+ 443 0142 EB01      		movw r28,r22
+ 444 0144 0894      		sec
+ 445 0146 E108      		sbc r14,__zero_reg__
+ 446 0148 F108      		sbc r15,__zero_reg__
+ 447               	.LBE3:
+  66:dataout.c     ****     while(num > 0)
+ 449               	.LM42:
+ 450 014a E114      		cp r14,__zero_reg__
+ 451 014c F104      		cpc r15,__zero_reg__
+ 452 014e 01F4      		brne .L19
+ 453               	/* epilogue start */
+  77:dataout.c     ****     }
+  78:dataout.c     **** }
+ 455               	.LM43:
+ 456 0150 DF91      		pop r29
+ 457 0152 CF91      		pop r28
+ 458 0154 1F91      		pop r17
+ 459 0156 0F91      		pop r16
+ 460 0158 FF90      		pop r15
+ 461 015a EF90      		pop r14
+ 462 015c DF90      		pop r13
+ 463 015e CF90      		pop r12
+ 464 0160 BF90      		pop r11
+ 465 0162 0895      		ret
+ 474               	.Lscope4:
+ 477               	.global	spitout
+ 479               	spitout:
+  79:dataout.c     **** 
+  80:dataout.c     **** uint8_t spitout(uint8_t place)
+  81:dataout.c     **** {
+ 481               	.LM44:
+ 482               	.LFBB5:
+ 483               	/* prologue: function */
+ 484               	/* frame size = 0 */
+ 485               	/* stack size = 0 */
+ 486               	.L__stack_usage = 0
+  82:dataout.c     **** 
+  83:dataout.c     **** serialout[place-1] = '\n';
+ 488               	.LM45:
+ 489 0164 E82F      		mov r30,r24
+ 490 0166 F0E0      		ldi r31,lo8(0)
+ 491 0168 E050      		subi r30,lo8(-(serialout-1))
+ 492 016a F040      		sbci r31,hi8(-(serialout-1))
+ 493 016c 8AE0      		ldi r24,lo8(10)
+ 494 016e 8083      		st Z,r24
+  84:dataout.c     **** //uint8_t datalen = strlen(serialout);
+  85:dataout.c     **** //serialout[datalen] = '\n';//replace last char (,) with return
+  86:dataout.c     **** uart_putst(serialout);
+ 496               	.LM46:
+ 497 0170 80E0      		ldi r24,lo8(serialout)
+ 498 0172 90E0      		ldi r25,hi8(serialout)
+ 499 0174 00D0      		rcall uart_putst
+ 500 0176 E0E0      		ldi r30,lo8(serialout)
+ 501 0178 F0E0      		ldi r31,hi8(serialout)
+ 502 017a 82E3      		ldi r24,lo8(50)
+ 503               	.L22:
+ 504               	.LBB4:
+  87:dataout.c     **** for (uint8_t i= 0; i<LINESIZE ;i++)//blank serialout
+  88:dataout.c     **** {
+  89:dataout.c     **** 	serialout[i] = '\0';
+ 506               	.LM47:
+ 507 017c 1192      		st Z+,__zero_reg__
+ 508 017e 8150      		subi r24,lo8(-(-1))
+  87:dataout.c     **** for (uint8_t i= 0; i<LINESIZE ;i++)//blank serialout
+ 510               	.LM48:
+ 511 0180 01F4      		brne .L22
+ 512               	/* epilogue start */
+ 513               	.LBE4:
+  90:dataout.c     **** }
+  91:dataout.c     **** return 0;//reset place
+  92:dataout.c     **** }
+ 515               	.LM49:
+ 516 0182 0895      		ret
+ 518               	.Lscope5:
+ 519               		.comm serialout,50,1
+ 522               	.Letext0:
+DEFINED SYMBOLS
+                            *ABS*:00000000 dataout.c
+     /tmp/cc3ZftEO.s:2      *ABS*:0000003f __SREG__
+     /tmp/cc3ZftEO.s:3      *ABS*:0000003e __SP_H__
+     /tmp/cc3ZftEO.s:4      *ABS*:0000003d __SP_L__
+     /tmp/cc3ZftEO.s:5      *ABS*:00000034 __CCP__
+     /tmp/cc3ZftEO.s:6      *ABS*:00000000 __tmp_reg__
+     /tmp/cc3ZftEO.s:7      *ABS*:00000001 __zero_reg__
+     /tmp/cc3ZftEO.s:134    .text:00000000 put_in_string
+                            *COM*:00000032 serialout
+     /tmp/cc3ZftEO.s:298    .text:000000c4 uart_putch
+     /tmp/cc3ZftEO.s:323    .text:000000cc uart_putst
+     /tmp/cc3ZftEO.s:361    .text:000000e2 uart_put16dec
+     /tmp/cc3ZftEO.s:479    .text:00000164 spitout
+
+UNDEFINED SYMBOLS
+__do_copy_data
+__do_clear_bss
+itoa
+strcpy
+__udivmodhi4

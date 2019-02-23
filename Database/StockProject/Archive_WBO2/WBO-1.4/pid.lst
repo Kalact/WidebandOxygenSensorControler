@@ -1,0 +1,440 @@
+   1               		.file	"pid.c"
+   2               	__SREG__ = 0x3f
+   3               	__SP_H__ = 0x3e
+   4               	__SP_L__ = 0x3d
+   5               	__CCP__ = 0x34
+   6               	__tmp_reg__ = 0
+   7               	__zero_reg__ = 1
+   9               		.text
+  10               	.Ltext0:
+  68               	.global	pid_Init
+  70               	pid_Init:
+   1:pid.c         **** /*This file has been prepared for Doxygen automatic documentation generation.*/ 
+   2:pid.c         **** /*! \file *********************************************************************
+   3:pid.c         ****  *
+   4:pid.c         ****  * \brief General PID implementation for AVR.
+   5:pid.c         ****  *
+   6:pid.c         ****  * Discrete PID controller implementation. Set up by giving P/I/D terms
+   7:pid.c         ****  * to Init_PID(), and uses a struct PID_DATA to store internal values.
+   8:pid.c         ****  *
+   9:pid.c         ****  * - File:               pid.c
+  10:pid.c         ****  * - Compiler:           IAR EWAAVR 4.11A
+  11:pid.c         ****  * - Supported devices:  All AVR devices can be used.
+  12:pid.c         ****  * - AppNote:            AVR221 - Discrete PID controller
+  13:pid.c         ****  *
+  14:pid.c         ****  * \author               Atmel Corporation: http://www.atmel.com \n
+  15:pid.c         ****  *                       Support email: avr@atmel.com
+  16:pid.c         ****  *
+  17:pid.c         ****  * $Name$
+  18:pid.c         ****  * $Revision: 456 $
+  19:pid.c         ****  * $RCSfile$
+  20:pid.c         ****  * $Date: 2006-02-16 12:46:13 +0100 (to, 16 feb 2006) $
+  21:pid.c         ****  *****************************************************************************/
+  22:pid.c         **** 
+  23:pid.c         **** #include "pid.h"
+  24:pid.c         **** #include "stdint.h"
+  25:pid.c         **** 
+  26:pid.c         **** /*! \brief Initialisation of PID controller parameters.
+  27:pid.c         ****  *
+  28:pid.c         ****  *  Initialise the variables used by the PID algorithm.
+  29:pid.c         ****  *
+  30:pid.c         ****  *  \param p_factor  Proportional term.
+  31:pid.c         ****  *  \param i_factor  Integral term.
+  32:pid.c         ****  *  \param d_factor  Derivate term.
+  33:pid.c         ****  *  \param pid  Struct with PID status. 
+  34:pid.c         ****  */
+  35:pid.c         **** void pid_Init(int16_t p_factor, int16_t i_factor, int16_t d_factor, struct PID_DATA *pid)
+  36:pid.c         **** // Set up PID controller parameters: fills the structure PID_DATA.
+  37:pid.c         **** {
+  72               	.LM0:
+  73               	.LFBB1:
+  74 0000 CF93      		push r28
+  75 0002 DF93      		push r29
+  76               	/* prologue: function */
+  77               	/* frame size = 0 */
+  78               	/* stack size = 2 */
+  79               	.L__stack_usage = 2
+  80 0004 FB01      		movw r30,r22
+  81 0006 E901      		movw r28,r18
+  38:pid.c         ****   // Start values for PID controller
+  39:pid.c         ****   pid->sumError = 0;
+  83               	.LM1:
+  84 0008 1A82      		std Y+2,__zero_reg__
+  85 000a 1B82      		std Y+3,__zero_reg__
+  86 000c 1C82      		std Y+4,__zero_reg__
+  87 000e 1D82      		std Y+5,__zero_reg__
+  40:pid.c         ****   pid->lastProcessValue = 0;
+  89               	.LM2:
+  90 0010 1982      		std Y+1,__zero_reg__
+  91 0012 1882      		st Y,__zero_reg__
+  41:pid.c         ****   // Tuning constants for PID loop
+  42:pid.c         ****   pid->P_Factor = p_factor;
+  93               	.LM3:
+  94 0014 9F83      		std Y+7,r25
+  95 0016 8E83      		std Y+6,r24
+  43:pid.c         ****   pid->I_Factor = i_factor;
+  97               	.LM4:
+  98 0018 7987      		std Y+9,r23
+  99 001a 6887      		std Y+8,r22
+  44:pid.c         ****   pid->D_Factor = d_factor;
+ 101               	.LM5:
+ 102 001c 5B87      		std Y+11,r21
+ 103 001e 4A87      		std Y+10,r20
+  45:pid.c         ****   // Limits to avoid overflow
+  46:pid.c         ****   pid->maxError = MAX_INT / (pid->P_Factor + 1);
+ 105               	.LM6:
+ 106 0020 BC01      		movw r22,r24
+ 107 0022 6F5F      		subi r22,lo8(-(1))
+ 108 0024 7F4F      		sbci r23,hi8(-(1))
+ 109 0026 8FEF      		ldi r24,lo8(32767)
+ 110 0028 9FE7      		ldi r25,hi8(32767)
+ 111 002a 00D0      		rcall __divmodhi4
+ 112 002c 7D87      		std Y+13,r23
+ 113 002e 6C87      		std Y+12,r22
+  47:pid.c         ****   pid->maxSumError = MAX_I_TERM / (pid->I_Factor + 1);
+ 115               	.LM7:
+ 116 0030 3196      		adiw r30,1
+ 117 0032 9F01      		movw r18,r30
+ 118 0034 4427      		clr r20
+ 119 0036 37FD      		sbrc r19,7
+ 120 0038 4095      		com r20
+ 121 003a 542F      		mov r21,r20
+ 122 003c 6FEF      		ldi r22,lo8(65535)
+ 123 003e 7FEF      		ldi r23,hi8(65535)
+ 124 0040 80E0      		ldi r24,hlo8(65535)
+ 125 0042 90E0      		ldi r25,hhi8(65535)
+ 126 0044 00D0      		rcall __divmodsi4
+ 127 0046 2E87      		std Y+14,r18
+ 128 0048 3F87      		std Y+15,r19
+ 129 004a 488B      		std Y+16,r20
+ 130 004c 598B      		std Y+17,r21
+ 131               	/* epilogue start */
+  48:pid.c         **** }
+ 133               	.LM8:
+ 134 004e DF91      		pop r29
+ 135 0050 CF91      		pop r28
+ 136 0052 0895      		ret
+ 138               	.Lscope1:
+ 143               	.global	pid_Controller
+ 145               	pid_Controller:
+  49:pid.c         **** 
+  50:pid.c         **** 
+  51:pid.c         **** /*! \brief PID control algorithm.
+  52:pid.c         ****  *
+  53:pid.c         ****  *  Calculates output from setpoint, process value and PID status.
+  54:pid.c         ****  *
+  55:pid.c         ****  *  \param setPoint  Desired value.
+  56:pid.c         ****  *  \param processValue  Measured value.
+  57:pid.c         ****  *  \param pid_st  PID status struct.
+  58:pid.c         ****  */
+  59:pid.c         **** int16_t pid_Controller(int16_t setPoint, int16_t processValue, struct PID_DATA *pid_st)
+  60:pid.c         **** {
+ 147               	.LM9:
+ 148               	.LFBB2:
+ 149 0054 EF92      		push r14
+ 150 0056 FF92      		push r15
+ 151 0058 0F93      		push r16
+ 152 005a 1F93      		push r17
+ 153 005c CF93      		push r28
+ 154 005e DF93      		push r29
+ 155               	/* prologue: function */
+ 156               	/* frame size = 0 */
+ 157               	/* stack size = 6 */
+ 158               	.L__stack_usage = 6
+ 159 0060 7B01      		movw r14,r22
+ 160 0062 EA01      		movw r28,r20
+  61:pid.c         ****   int16_t error, p_term, d_term;
+  62:pid.c         ****   int32_t i_term, ret, temp;
+  63:pid.c         **** 
+  64:pid.c         ****   error = setPoint - processValue;
+ 162               	.LM10:
+ 163 0064 BC01      		movw r22,r24
+ 164 0066 6E19      		sub r22,r14
+ 165 0068 7F09      		sbc r23,r15
+  65:pid.c         **** 
+  66:pid.c         ****   // Calculate Pterm and limit error overflow
+  67:pid.c         ****   if (error > pid_st->maxError){
+ 167               	.LM11:
+ 168 006a 8C85      		ldd r24,Y+12
+ 169 006c 9D85      		ldd r25,Y+13
+ 170 006e 8617      		cp r24,r22
+ 171 0070 9707      		cpc r25,r23
+ 172 0072 04F0      		brlt .L9
+  68:pid.c         ****     p_term = MAX_INT;
+  69:pid.c         ****   }
+  70:pid.c         ****   else if (error < -pid_st->maxError){
+ 174               	.LM12:
+ 175 0074 9095      		com r25
+ 176 0076 8195      		neg r24
+ 177 0078 9F4F      		sbci r25,lo8(-1)
+ 178 007a 6817      		cp r22,r24
+ 179 007c 7907      		cpc r23,r25
+ 180 007e 04F0      		brlt .L10
+  71:pid.c         ****     p_term = -MAX_INT;
+  72:pid.c         ****   }
+  73:pid.c         ****   else{
+  74:pid.c         ****     p_term = pid_st->P_Factor * error;
+ 182               	.LM13:
+ 183 0080 8E81      		ldd r24,Y+6
+ 184 0082 9F81      		ldd r25,Y+7
+ 185 0084 689F      		mul r22,r24
+ 186 0086 8001      		movw r16,r0
+ 187 0088 699F      		mul r22,r25
+ 188 008a 100D      		add r17,r0
+ 189 008c 789F      		mul r23,r24
+ 190 008e 100D      		add r17,r0
+ 191 0090 1124      		clr r1
+ 192 0092 00C0      		rjmp .L3
+ 193               	.L9:
+  68:pid.c         ****     p_term = MAX_INT;
+ 195               	.LM14:
+ 196 0094 0FEF      		ldi r16,lo8(32767)
+ 197 0096 1FE7      		ldi r17,hi8(32767)
+ 198 0098 00C0      		rjmp .L3
+ 199               	.L10:
+  71:pid.c         ****     p_term = -MAX_INT;
+ 201               	.LM15:
+ 202 009a 01E0      		ldi r16,lo8(-32767)
+ 203 009c 10E8      		ldi r17,hi8(-32767)
+ 204               	.L3:
+  75:pid.c         ****   }
+  76:pid.c         **** 
+  77:pid.c         ****   // Calculate Iterm and limit integral runaway
+  78:pid.c         ****   temp = pid_st->sumError + error;
+ 206               	.LM16:
+ 207 009e 8827      		clr r24
+ 208 00a0 77FD      		sbrc r23,7
+ 209 00a2 8095      		com r24
+ 210 00a4 982F      		mov r25,r24
+ 211 00a6 2A81      		ldd r18,Y+2
+ 212 00a8 3B81      		ldd r19,Y+3
+ 213 00aa 4C81      		ldd r20,Y+4
+ 214 00ac 5D81      		ldd r21,Y+5
+ 215 00ae 620F      		add r22,r18
+ 216 00b0 731F      		adc r23,r19
+ 217 00b2 841F      		adc r24,r20
+ 218 00b4 951F      		adc r25,r21
+  79:pid.c         ****   if(temp > pid_st->maxSumError){
+ 220               	.LM17:
+ 221 00b6 2E85      		ldd r18,Y+14
+ 222 00b8 3F85      		ldd r19,Y+15
+ 223 00ba 4889      		ldd r20,Y+16
+ 224 00bc 5989      		ldd r21,Y+17
+ 225 00be 2617      		cp r18,r22
+ 226 00c0 3707      		cpc r19,r23
+ 227 00c2 4807      		cpc r20,r24
+ 228 00c4 5907      		cpc r21,r25
+ 229 00c6 04F4      		brge .L4
+  80:pid.c         ****     i_term = MAX_I_TERM;
+  81:pid.c         ****     pid_st->sumError = pid_st->maxSumError;
+ 231               	.LM18:
+ 232 00c8 2A83      		std Y+2,r18
+ 233 00ca 3B83      		std Y+3,r19
+ 234 00cc 4C83      		std Y+4,r20
+ 235 00ce 5D83      		std Y+5,r21
+  80:pid.c         ****     i_term = MAX_I_TERM;
+ 237               	.LM19:
+ 238 00d0 6FEF      		ldi r22,lo8(65535)
+ 239 00d2 7FEF      		ldi r23,hi8(65535)
+ 240 00d4 80E0      		ldi r24,hlo8(65535)
+ 241 00d6 90E0      		ldi r25,hhi8(65535)
+ 242 00d8 00C0      		rjmp .L5
+ 243               	.L4:
+  82:pid.c         ****   }
+  83:pid.c         ****   else if(temp < -pid_st->maxSumError){
+ 245               	.LM20:
+ 246 00da 5095      		com r21
+ 247 00dc 4095      		com r20
+ 248 00de 3095      		com r19
+ 249 00e0 2195      		neg r18
+ 250 00e2 3F4F      		sbci r19,lo8(-1)
+ 251 00e4 4F4F      		sbci r20,lo8(-1)
+ 252 00e6 5F4F      		sbci r21,lo8(-1)
+ 253 00e8 6217      		cp r22,r18
+ 254 00ea 7307      		cpc r23,r19
+ 255 00ec 8407      		cpc r24,r20
+ 256 00ee 9507      		cpc r25,r21
+ 257 00f0 04F4      		brge .L6
+  84:pid.c         ****     i_term = -MAX_I_TERM;
+  85:pid.c         ****     pid_st->sumError = -pid_st->maxSumError;
+ 259               	.LM21:
+ 260 00f2 2A83      		std Y+2,r18
+ 261 00f4 3B83      		std Y+3,r19
+ 262 00f6 4C83      		std Y+4,r20
+ 263 00f8 5D83      		std Y+5,r21
+  84:pid.c         ****     i_term = -MAX_I_TERM;
+ 265               	.LM22:
+ 266 00fa 61E0      		ldi r22,lo8(-65535)
+ 267 00fc 70E0      		ldi r23,hi8(-65535)
+ 268 00fe 8FEF      		ldi r24,hlo8(-65535)
+ 269 0100 9FEF      		ldi r25,hhi8(-65535)
+ 270 0102 00C0      		rjmp .L5
+ 271               	.L6:
+  86:pid.c         ****   }
+  87:pid.c         ****   else{
+  88:pid.c         ****     pid_st->sumError = temp;
+ 273               	.LM23:
+ 274 0104 6A83      		std Y+2,r22
+ 275 0106 7B83      		std Y+3,r23
+ 276 0108 8C83      		std Y+4,r24
+ 277 010a 9D83      		std Y+5,r25
+  89:pid.c         ****     i_term = pid_st->I_Factor * pid_st->sumError;
+ 279               	.LM24:
+ 280 010c 2885      		ldd r18,Y+8
+ 281 010e 3985      		ldd r19,Y+9
+ 282 0110 4427      		clr r20
+ 283 0112 37FD      		sbrc r19,7
+ 284 0114 4095      		com r20
+ 285 0116 542F      		mov r21,r20
+ 286 0118 00D0      		rcall __mulsi3
+ 287               	.L5:
+  90:pid.c         ****   }
+  91:pid.c         **** 
+  92:pid.c         ****   // Calculate Dterm
+  93:pid.c         ****   d_term = pid_st->D_Factor * (pid_st->lastProcessValue - processValue);
+ 289               	.LM25:
+ 290 011a 4881      		ld r20,Y
+ 291 011c 5981      		ldd r21,Y+1
+ 292 011e 4E19      		sub r20,r14
+ 293 0120 5F09      		sbc r21,r15
+ 294 0122 EA85      		ldd r30,Y+10
+ 295 0124 FB85      		ldd r31,Y+11
+ 296 0126 4E9F      		mul r20,r30
+ 297 0128 9001      		movw r18,r0
+ 298 012a 4F9F      		mul r20,r31
+ 299 012c 300D      		add r19,r0
+ 300 012e 5E9F      		mul r21,r30
+ 301 0130 300D      		add r19,r0
+ 302 0132 1124      		clr r1
+  94:pid.c         **** 
+  95:pid.c         ****   pid_st->lastProcessValue = processValue;
+ 304               	.LM26:
+ 305 0134 F982      		std Y+1,r15
+ 306 0136 E882      		st Y,r14
+  96:pid.c         **** // Calculate P+I+D
+  97:pid.c         **** /////NOTE://adjusted time here by dividig I by the frequency of pid calculations
+  98:pid.c         ****   ret = (p_term + (i_term/30) + (d_term)) / SCALING_FACTOR;
+ 308               	.LM27:
+ 309 0138 A801      		movw r20,r16
+ 310 013a 7A01      		movw r14,r20
+ 311 013c 0027      		clr r16
+ 312 013e F7FC      		sbrc r15,7
+ 313 0140 0095      		com r16
+ 314 0142 102F      		mov r17,r16
+ 315 0144 4427      		clr r20
+ 316 0146 37FD      		sbrc r19,7
+ 317 0148 4095      		com r20
+ 318 014a 542F      		mov r21,r20
+ 319 014c E20E      		add r14,r18
+ 320 014e F31E      		adc r15,r19
+ 321 0150 041F      		adc r16,r20
+ 322 0152 151F      		adc r17,r21
+ 323 0154 2EE1      		ldi r18,lo8(30)
+ 324 0156 30E0      		ldi r19,hi8(30)
+ 325 0158 40E0      		ldi r20,hlo8(30)
+ 326 015a 50E0      		ldi r21,hhi8(30)
+ 327 015c 00D0      		rcall __divmodsi4
+ 328 015e E20E      		add r14,r18
+ 329 0160 F31E      		adc r15,r19
+ 330 0162 041F      		adc r16,r20
+ 331 0164 151F      		adc r17,r21
+ 332 0166 C801      		movw r24,r16
+ 333 0168 B701      		movw r22,r14
+ 334 016a 24E1      		ldi r18,lo8(20)
+ 335 016c 30E0      		ldi r19,hi8(20)
+ 336 016e 40E0      		ldi r20,hlo8(20)
+ 337 0170 50E0      		ldi r21,hhi8(20)
+ 338 0172 00D0      		rcall __divmodsi4
+ 339 0174 2130      		cpi r18,lo8(-32767)
+ 340 0176 80E8      		ldi r24,hi8(-32767)
+ 341 0178 3807      		cpc r19,r24
+ 342 017a 8FEF      		ldi r24,hlo8(-32767)
+ 343 017c 4807      		cpc r20,r24
+ 344 017e 8FEF      		ldi r24,hhi8(-32767)
+ 345 0180 5807      		cpc r21,r24
+ 346 0182 04F4      		brge .L7
+ 347 0184 21E0      		ldi r18,lo8(-32767)
+ 348 0186 30E8      		ldi r19,hi8(-32767)
+ 349 0188 4FEF      		ldi r20,hlo8(-32767)
+ 350 018a 5FEF      		ldi r21,hhi8(-32767)
+ 351               	.L7:
+  99:pid.c         ****   if(ret > MAX_INT){
+ 100:pid.c         ****     ret = MAX_INT;
+ 101:pid.c         ****   }
+ 102:pid.c         ****  // else if(ret < 0){
+ 103:pid.c         ****     //ret = 0;
+ 104:pid.c         ****   else if(ret < -MAX_INT){
+ 105:pid.c         ****     ret = -MAX_INT;
+ 106:pid.c         ****   }
+ 107:pid.c         **** 
+ 108:pid.c         ****   return((int16_t)ret);
+ 353               	.LM28:
+ 354 018c 2030      		cpi r18,lo8(32768)
+ 355 018e 80E8      		ldi r24,hi8(32768)
+ 356 0190 3807      		cpc r19,r24
+ 357 0192 80E0      		ldi r24,hlo8(32768)
+ 358 0194 4807      		cpc r20,r24
+ 359 0196 80E0      		ldi r24,hhi8(32768)
+ 360 0198 5807      		cpc r21,r24
+ 361 019a 04F0      		brlt .L8
+ 362 019c 2FEF      		ldi r18,lo8(32767)
+ 363 019e 3FE7      		ldi r19,hi8(32767)
+ 364 01a0 40E0      		ldi r20,hlo8(32767)
+ 365 01a2 50E0      		ldi r21,hhi8(32767)
+ 366               	.L8:
+ 109:pid.c         **** }
+ 368               	.LM29:
+ 369 01a4 C901      		movw r24,r18
+ 370               	/* epilogue start */
+ 371 01a6 DF91      		pop r29
+ 372 01a8 CF91      		pop r28
+ 373 01aa 1F91      		pop r17
+ 374 01ac 0F91      		pop r16
+ 375 01ae FF90      		pop r15
+ 376 01b0 EF90      		pop r14
+ 377 01b2 0895      		ret
+ 386               	.Lscope2:
+ 389               	.global	pid_Reset_Integrator
+ 391               	pid_Reset_Integrator:
+ 110:pid.c         **** 
+ 111:pid.c         **** /*! \brief Resets the integrator.
+ 112:pid.c         ****  *
+ 113:pid.c         ****  *  Calling this function will reset the integrator in the PID regulator.
+ 114:pid.c         ****  */
+ 115:pid.c         **** void pid_Reset_Integrator(pidData_t *pid_st)
+ 116:pid.c         **** {
+ 393               	.LM30:
+ 394               	.LFBB3:
+ 395               	/* prologue: function */
+ 396               	/* frame size = 0 */
+ 397               	/* stack size = 0 */
+ 398               	.L__stack_usage = 0
+ 117:pid.c         ****   pid_st->sumError = 0;
+ 400               	.LM31:
+ 401 01b4 FC01      		movw r30,r24
+ 402 01b6 1282      		std Z+2,__zero_reg__
+ 403 01b8 1382      		std Z+3,__zero_reg__
+ 404 01ba 1482      		std Z+4,__zero_reg__
+ 405 01bc 1582      		std Z+5,__zero_reg__
+ 406               	/* epilogue start */
+ 118:pid.c         **** }
+ 408               	.LM32:
+ 409 01be 0895      		ret
+ 411               	.Lscope3:
+ 413               	.Letext0:
+DEFINED SYMBOLS
+                            *ABS*:00000000 pid.c
+     /tmp/ccJ5uZKE.s:2      *ABS*:0000003f __SREG__
+     /tmp/ccJ5uZKE.s:3      *ABS*:0000003e __SP_H__
+     /tmp/ccJ5uZKE.s:4      *ABS*:0000003d __SP_L__
+     /tmp/ccJ5uZKE.s:5      *ABS*:00000034 __CCP__
+     /tmp/ccJ5uZKE.s:6      *ABS*:00000000 __tmp_reg__
+     /tmp/ccJ5uZKE.s:7      *ABS*:00000001 __zero_reg__
+     /tmp/ccJ5uZKE.s:70     .text:00000000 pid_Init
+     /tmp/ccJ5uZKE.s:145    .text:00000054 pid_Controller
+     /tmp/ccJ5uZKE.s:391    .text:000001b4 pid_Reset_Integrator
+
+UNDEFINED SYMBOLS
+__divmodhi4
+__divmodsi4
+__mulsi3
